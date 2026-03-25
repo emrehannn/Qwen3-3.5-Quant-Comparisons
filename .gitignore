@@ -1,0 +1,10 @@
+# Python virtual environments
+venv/
+.venv/
+env/
+
+# Environment variables / Secrets
+.env
+
+# Specific local files
+expose.md
