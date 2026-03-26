@@ -3,7 +3,6 @@ Quick model verification test.
 Loads each model and runs simple inference + GSM8K to verify answer extraction.
 """
 import sys
-import re
 from pathlib import Path
 from llama_cpp import Llama
 
@@ -131,7 +130,7 @@ Answer:"""
         prompt=prompt,
         max_tokens=512,
         temperature=0.0,
-        stop=["<|im_start|>", "Question:"],
+        stop=["<|im_start|>", "<|im_end|>", "Question:"],
     )
     
     generated = output["choices"][0]["text"]

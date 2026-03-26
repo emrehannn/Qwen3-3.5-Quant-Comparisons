@@ -7,6 +7,7 @@ datasets>=2.14.0
 
 # Evaluation framework
 lm-eval>=0.4.0
+Levenshtein
 
 # Data processing
 numpy>=1.24.0

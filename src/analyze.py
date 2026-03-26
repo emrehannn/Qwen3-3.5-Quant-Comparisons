@@ -1,388 +1,579 @@
 """
 Analysis script for benchmark results.
-Generates comparison plots for the paper figures.
+Generates publication-quality figures for the quantization study.
+
+All NeedleBench metrics in result files are stored as fractions in [0, 1].
+This script multiplies by 100 when displaying percentages.
+
+Figures:
+    1. Perplexity degradation curve
+    2. GSM8K accuracy (short-context control)
+    3. NeedleBench heatmap — task × context length × quant
+    4. Depth-degradation curves — THE THESIS FIGURE
+       Shows per-depth S-RT accuracy for each (arch, quant) combination.
+       If GDN compounds quantization error over sequence distance, Qwen3.5
+       should show steeper accuracy decline at shallow depths vs Qwen3.
+    5. Quantization degradation delta — Q8 baseline vs Q3 stress test
 """
+
 import json
+import matplotlib
+matplotlib.use("Agg")   # headless — safe for servers without a display
 import matplotlib.pyplot as plt
+import matplotlib.lines as mlines
 import seaborn as sns
 import numpy as np
 from pathlib import Path
 from collections import defaultdict
 
-# Results directories
+# ── Directories ───────────────────────────────────────────────────────────────
 RESULTS_DIR = Path("results/completed")
 FIGURES_DIR = Path("results/figures")
 FIGURES_DIR.mkdir(parents=True, exist_ok=True)
 
-# Set style
-sns.set_style("whitegrid")
-plt.rcParams['figure.figsize'] = (10, 6)
-plt.rcParams['font.size'] = 11
+# ── Global style ──────────────────────────────────────────────────────────────
+sns.set_theme(style="whitegrid", font_scale=1.2)
+plt.rcParams["figure.dpi"] = 150
+
+# Consistent color / marker scheme
+COLORS  = {"Qwen3": "#1f77b4", "Qwen3.5": "#ff7f0e"}
+MARKERS = {"Qwen3": "o",       "Qwen3.5": "s"}
+QUANT_ORDER     = ["Q8", "Q4", "Q3"]
+QUANT_LINESTYLE = {"Q8": "-",  "Q4": "--", "Q3": ":"}
+
+LABEL_MAP = {
+    "Q8_0":      "Q8",
+    "Q4_K_M":    "Q4",
+    "Q3_K_M":    "Q3",
+    "UD-Q3_K_XL": "Q3",
+}
 
 
-def load_all_results():
-    """Load all completed benchmark results."""
-    results = defaultdict(dict)
-    
+# ══════════════════════════════════════════════════════════════════════════════
+# Loading & parsing
+# ══════════════════════════════════════════════════════════════════════════════
+
+def load_all_results() -> dict:
+    """
+    Load all JSON result files from results/completed/.
+    Returns nested dict: results[benchmark][model_slug] = data_dict
+    """
+    results: dict = defaultdict(dict)
     if not RESULTS_DIR.exists():
-        print(f"No results found in {RESULTS_DIR}")
+        print(f"[!] Results directory not found: {RESULTS_DIR}")
         return results
-    
-    for json_file in RESULTS_DIR.glob("*_*.json"):
-        # Parse filename: MODEL_BENCHMARK.json
-        parts = json_file.stem.split("_")
-        if len(parts) >= 2:
-            model = "_".join(parts[:-1])  # Everything except last part
-            benchmark = parts[-1]
-            
-            try:
-                with open(json_file) as f:
-                    data = json.load(f)
-                results[benchmark][model] = data
-            except Exception as e:
-                print(f"Error loading {json_file}: {e}")
-    
+
+    known_benchmarks = ["needlebench", "perplexity", "gsm8k"]
+
+    for json_file in sorted(RESULTS_DIR.glob("*.json")):
+        stem      = json_file.stem
+        found_bench = None
+        model_slug  = stem
+
+        for bench in known_benchmarks:
+            if stem.endswith(f"_{bench}"):
+                found_bench = bench
+                model_slug  = stem[: -len(f"_{bench}")]
+                break
+
+        if found_bench is None:
+            continue
+
+        try:
+            with open(json_file) as fh:
+                data = json.load(fh)
+            results[found_bench][model_slug] = data
+        except Exception as exc:
+            print(f"[!] Error loading {json_file}: {exc}")
+
     return results
 
 
-def parse_model_config(model_name: str):
-    """Parse model name into (architecture, quant_level)."""
-    # Examples:
-    # Qwen3-4B-Q8 -> (Qwen3, Q8)
-    # Qwen3.5-4B-Q4 -> (Qwen3.5, Q4)
-    
+def parse_model_config(model_name: str) -> tuple[str, str, str]:
+    """
+    Returns (arch_label, base_key, quant_label).
+    base_key is "Qwen3" or "Qwen3.5" — used as dict keys / legend labels.
+    """
     if "Qwen3.5" in model_name:
-        arch = "Qwen3.5 (GDN Hybrid)"
-        base = "Qwen3.5"
+        arch  = "Qwen3.5 (GDN Hybrid)"
+        base  = "Qwen3.5"
     elif "Qwen3" in model_name:
-        arch = "Qwen3 (Pure Transformer)"
-        base = "Qwen3"
+        arch  = "Qwen3 (Transformer)"
+        base  = "Qwen3"
     else:
-        arch = model_name
-        base = model_name
-    
-    # Extract quant level
-    if "Q8" in model_name:
-        quant = "Q8"
-    elif "Q4" in model_name:
-        quant = "Q4"
-    elif "Q3" in model_name:
-        quant = "Q3"
-    else:
-        quant = "unknown"
-    
+        arch = base = model_name
+
+    quant = "unknown"
+    for pat in ["Q8_0", "Q4_K_M", "UD-Q3_K_XL", "Q3_K_M", "Q8", "Q4", "Q3"]:
+        if pat in model_name:
+            quant = LABEL_MAP.get(pat, pat)
+            break
+
     return arch, base, quant
 
 
-def plot_perplexity(results):
-    """Plot perplexity comparison (Figure 1)."""
-    if "perplexity" not in results or not results["perplexity"]:
-        print("No perplexity results found")
+# ══════════════════════════════════════════════════════════════════════════════
+# Figure 1 — Perplexity
+# ══════════════════════════════════════════════════════════════════════════════
+
+def plot_perplexity(results: dict) -> None:
+    bench = "perplexity"
+    if bench not in results or not results[bench]:
+        print("[skip] Figure 1: no perplexity data")
         return
-    
-    perplexity_data = results["perplexity"]
-    
-    # Organize data
-    data = []
-    for model_name, result in perplexity_data.items():
-        arch, base, quant = parse_model_config(model_name)
-        ppl = result.get("perplexity", float('nan'))
-        data.append({
-            "Model": base,
-            "Architecture": arch,
-            "Quantization": quant,
-            "Perplexity": ppl
-        })
-    
-    if not data:
-        print("No valid perplexity data")
-        return
-    
-    # Create plot
-    fig, ax = plt.subplots()
-    
-    quant_order = ["Q8", "Q4", "Q3"]
-    models = sorted(set(d["Model"] for d in data))
-    
-    x = np.arange(len(quant_order))
-    width = 0.35
-    
-    for i, model in enumerate(models):
-        values = []
-        for q in quant_order:
-            val = next((d["Perplexity"] for d in data 
-                       if d["Model"] == model and d["Quantization"] == q), None)
-            values.append(val if val is not None else 0)
-        
-        offset = width * (i - len(models)/2 + 0.5)
-        ax.bar(x + offset, values, width, label=model)
-    
-    ax.set_xlabel("Quantization Level")
-    ax.set_ylabel("Perplexity (lower is better)")
-    ax.set_title("Figure 1: Perplexity Degradation by Quantization Level")
-    ax.set_xticks(x)
-    ax.set_xticklabels(quant_order)
+
+    ppl_data: dict = defaultdict(dict)
+    for model_name, result in results[bench].items():
+        _, base, quant = parse_model_config(model_name)
+        ppl = result.get("perplexity", float("nan"))
+        ppl_data[base][quant] = ppl
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    x_pos = np.arange(len(QUANT_ORDER))
+
+    for model in sorted(ppl_data):
+        values = [ppl_data[model].get(q, np.nan) for q in QUANT_ORDER]
+        ax.plot(x_pos, values,
+                marker=MARKERS.get(model, "o"), linewidth=2.5, markersize=10,
+                label=model, color=COLORS.get(model, "gray"))
+
+    ax.set_xticks(x_pos)
+    ax.set_xticklabels(QUANT_ORDER)
+    ax.set_xlabel("Quantisation Level")
+    ax.set_ylabel("Perplexity (lower = better)")
+    ax.set_title("Figure 1: WikiText-103 Perplexity by Quantisation Level",
+                 fontweight="bold")
     ax.legend()
-    
     plt.tight_layout()
-    plt.savefig(FIGURES_DIR / "figure1_perplexity.png", dpi=150)
-    plt.savefig(FIGURES_DIR / "figure1_perplexity.pdf")
-    print(f"Saved: {FIGURES_DIR / 'figure1_perplexity.png'}")
-    plt.close()
+    _save(fig, "figure1_perplexity")
 
 
-def plot_gsm8k(results):
-    """Plot GSM8K accuracy comparison (Figure 2)."""
-    if "gsm8k" not in results or not results["gsm8k"]:
-        print("No GSM8K results found")
+# ══════════════════════════════════════════════════════════════════════════════
+# Figure 2 — GSM8K
+# ══════════════════════════════════════════════════════════════════════════════
+
+def plot_gsm8k(results: dict) -> None:
+    bench = "gsm8k"
+    if bench not in results or not results[bench]:
+        print("[skip] Figure 2: no GSM8K data")
         return
-    
-    gsm8k_data = results["gsm8k"]
-    
-    data = []
-    for model_name, result in gsm8k_data.items():
-        arch, base, quant = parse_model_config(model_name)
-        acc = result.get("accuracy", 0) * 100
-        data.append({
-            "Model": base,
-            "Architecture": arch,
-            "Quantization": quant,
-            "Accuracy": acc
-        })
-    
-    if not data:
-        print("No valid GSM8K data")
-        return
-    
-    fig, ax = plt.subplots()
-    
-    quant_order = ["Q8", "Q4", "Q3"]
-    models = sorted(set(d["Model"] for d in data))
-    
-    x = np.arange(len(quant_order))
+
+    acc_data: dict = defaultdict(dict)
+    for model_name, result in results[bench].items():
+        _, base, quant = parse_model_config(model_name)
+        acc_data[base][quant] = result.get("accuracy", 0.0) * 100   # 0-1 → %
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    x     = np.arange(len(QUANT_ORDER))
     width = 0.35
-    
+    models = sorted(acc_data)
+
     for i, model in enumerate(models):
-        values = []
-        for q in quant_order:
-            val = next((d["Accuracy"] for d in data 
-                       if d["Model"] == model and d["Quantization"] == q), 0)
-            values.append(val)
-        
-        offset = width * (i - len(models)/2 + 0.5)
-        ax.bar(x + offset, values, width, label=model)
-    
-    ax.set_xlabel("Quantization Level")
+        values = [acc_data[model].get(q, 0.0) for q in QUANT_ORDER]
+        offset = width * (i - (len(models) - 1) / 2)
+        ax.bar(x + offset, values, width,
+               label=model, color=COLORS.get(model, "gray"), alpha=0.85)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(QUANT_ORDER)
+    ax.set_xlabel("Quantisation Level")
     ax.set_ylabel("Accuracy (%)")
-    ax.set_title("Figure 2: GSM8K Math Reasoning Accuracy")
-    ax.set_xticks(x)
-    ax.set_xticklabels(quant_order)
-    ax.legend()
     ax.set_ylim(0, 100)
-    
+    ax.set_title("Figure 2: GSM8K Accuracy — Short-Context Control (250 samples)",
+                 fontweight="bold")
+    ax.legend()
+    ax.grid(True, axis="y", alpha=0.3)
     plt.tight_layout()
-    plt.savefig(FIGURES_DIR / "figure2_gsm8k.png", dpi=150)
-    plt.savefig(FIGURES_DIR / "figure2_gsm8k.pdf")
-    print(f"Saved: {FIGURES_DIR / 'figure2_gsm8k.png'}")
-    plt.close()
+    _save(fig, "figure2_gsm8k")
 
 
-def plot_niah(results):
-    """Plot NIAH (Needle-in-a-Haystack) results (Figure 3 - main claim)."""
-    # Use niah (random) if available, fall back to niah_ablation
-    niah_key = "niah" if "niah" in results and results["niah"] else "niah_ablation"
-    if niah_key not in results or not results[niah_key]:
-        print("No NIAH results found")
+# ══════════════════════════════════════════════════════════════════════════════
+# Figure 3 — NeedleBench heatmap (context length × quant per task per arch)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def plot_needlebench_heatmap(results: dict) -> None:
+    """
+    Heatmap: rows = context lengths, columns = quant levels.
+    One subplot per (architecture × task) combination.
+    Scores are multiplied by 100 for percentage display.
+
+    NOTE: S-RT and M-RS store 'accuracy' in [0,1]; M-RT stores 'f1' in [0,1].
+    Both are multiplied by 100 here.
+    """
+    bench_key = "needlebench"
+    if bench_key not in results or not results[bench_key]:
+        print("[skip] Figure 3: no NeedleBench data")
         return
-    
-    niah_data = results[niah_key]
-    
-    # Organize by model and context length
-    data = defaultdict(lambda: defaultdict(dict))
-    
-    for model_name, result in niah_data.items():
-        arch, base, quant = parse_model_config(model_name)
-        
-        for ctx_result in result.get("results", []):
-            ctx_len = ctx_result.get("context_length", 0)
-            acc = ctx_result.get("accuracy", 0) * 100
-            
-            data[base][quant][ctx_len] = acc
-    
-    if not data:
-        print("No valid NIAH data")
+
+    task_metric = {"S-RT": "accuracy", "M-RT": "f1", "M-RS": "accuracy"}
+    tasks       = ["S-RT", "M-RT", "M-RS"]
+
+    # Collect data: models_data[base][task][ctx_len][quant] = score (%)
+    models_data    = defaultdict(lambda: defaultdict(lambda: defaultdict(dict)))
+    all_ctx_lengths = set()
+
+    for model_name, result in results[bench_key].items():
+        _, base, quant = parse_model_config(model_name)
+        for task in tasks:
+            metric       = task_metric[task]
+            task_results = result.get("tasks", {}).get(task, [])
+            for r in task_results:
+                ctx = r.get("context_length", 0)
+                if ctx == 0:
+                    continue
+                all_ctx_lengths.add(ctx)
+                val = r.get(metric, None)
+                if val is not None:
+                    # Both accuracy and f1 are in [0,1] — multiply to get %
+                    models_data[base][task][ctx][quant] = val * 100
+
+    CTX_LENGTHS  = sorted(all_ctx_lengths)
+    model_bases  = sorted(models_data.keys())
+    if not model_bases or not CTX_LENGTHS:
+        print("[skip] Figure 3: insufficient data to build heatmap")
         return
-    
-    # Create subplot for each context length
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-    context_lengths = [4096, 8192]
-    quant_order = ["Q8", "Q4", "Q3"]
-    
-    for idx, ctx_len in enumerate(context_lengths):
-        ax = axes[idx]
-        
-        models = sorted(data.keys())
-        x = np.arange(len(quant_order))
-        width = 0.35
-        
-        for i, model in enumerate(models):
-            values = []
-            for q in quant_order:
-                val = data[model].get(q, {}).get(ctx_len, 0)
-                values.append(val)
-            
-            offset = width * (i - len(models)/2 + 0.5)
-            ax.bar(x + offset, values, width, label=model)
-        
-        ax.set_xlabel("Quantization Level")
-        ax.set_ylabel("Retrieval Accuracy (%)")
-        ax.set_title(f"Context Length: {ctx_len} tokens")
-        ax.set_xticks(x)
-        ax.set_xticklabels(quant_order)
-        ax.legend()
+
+    fig, axes = plt.subplots(
+        len(model_bases), len(tasks),
+        figsize=(5 * len(tasks), 4 * len(model_bases))
+    )
+    if len(model_bases) == 1:
+        axes = axes.reshape(1, -1)
+    if len(tasks) == 1:
+        axes = axes.reshape(-1, 1)
+
+    for i, model in enumerate(model_bases):
+        for j, task in enumerate(tasks):
+            ax     = axes[i, j]
+            matrix = np.full((len(CTX_LENGTHS), len(QUANT_ORDER)), np.nan)
+            annot  = []
+
+            for ki, ctx in enumerate(CTX_LENGTHS):
+                row = []
+                for kj, quant in enumerate(QUANT_ORDER):
+                    val = models_data[model][task].get(ctx, {}).get(quant, None)
+                    if val is not None:
+                        matrix[ki, kj] = val
+                        row.append(f"{val:.0f}%")
+                    else:
+                        row.append("N/A")
+                annot.append(row)
+
+            sns.heatmap(matrix, ax=ax, annot=annot, fmt="",
+                        cmap="RdYlGn", vmin=0, vmax=100,
+                        linewidths=0.5, linecolor="white",
+                        xticklabels=QUANT_ORDER,
+                        yticklabels=[f"{c//1024}k" for c in CTX_LENGTHS],
+                        cbar_kws={"label": "Score (%)"} if j == len(tasks)-1
+                                  else {"label": ""},
+                        mask=np.isnan(matrix))
+
+            metric_label = "F1" if task == "M-RT" else "Accuracy"
+            ax.set_title(f"{model} — {task} ({metric_label})",
+                         fontsize=10, fontweight="bold")
+            if i == len(model_bases) - 1:
+                ax.set_xlabel("Quantisation")
+            if j == 0:
+                ax.set_ylabel("Context Length")
+
+    fig.suptitle(
+        "Figure 3: NeedleBench Performance by Task, Context Length & Quantisation",
+        fontsize=12, fontweight="bold", y=1.01)
+    plt.tight_layout()
+    _save(fig, "figure3_needlebench_heatmap")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Figure 4 — Depth-degradation (THESIS FIGURE)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def plot_depth_degradation(results: dict) -> None:
+    """
+    THE THESIS FIGURE.
+
+    Plots S-RT accuracy (%) vs needle depth for each (architecture, quant)
+    combination, one panel per context length.
+
+    Expected signal: if GDN hidden states compound quantization error,
+    Qwen3.5-Q3 (and -Q4) should show lower accuracy at shallow depths
+    (needle near start of document → info must survive many recurrent steps)
+    while Qwen3 should show a flatter profile.
+
+    Only Q4 and Q3 models run NeedleBench (Q8 is excluded due to VRAM).
+    Scores are multiplied by 100 for percentage display.
+    """
+    bench_key = "needlebench"
+    if bench_key not in results or not results[bench_key]:
+        print("[skip] Figure 4: no NeedleBench data")
+        return
+
+    # Collect depth curves:
+    # curves[ctx_len][base][quant] = {depth_pct: accuracy%}
+    curves: dict = defaultdict(lambda: defaultdict(lambda: defaultdict(dict)))
+    all_ctx_lengths: set = set()
+
+    for model_name, result in results[bench_key].items():
+        _, base, quant = parse_model_config(model_name)
+
+        srt_results = result.get("tasks", {}).get("S-RT", [])
+        for task_result in srt_results:
+            ctx       = task_result.get("context_length", 0)
+            breakdown = task_result.get("depth_breakdown", {})
+            if not ctx or not breakdown:
+                continue
+            all_ctx_lengths.add(ctx)
+            for depth_label, stats in breakdown.items():
+                try:
+                    depth_pct = int(depth_label.rstrip("%"))
+                except ValueError:
+                    continue
+                acc = stats.get("accuracy", None)
+                if acc is not None:
+                    curves[ctx][base][quant][depth_pct] = acc * 100  # [0,1] → %
+
+    if not curves:
+        print("[skip] Figure 4: no depth_breakdown data in S-RT results")
+        return
+
+    ctx_lengths = sorted(all_ctx_lengths)
+    n_panels    = len(ctx_lengths)
+
+    fig, axes = plt.subplots(1, n_panels, figsize=(7 * n_panels, 5), sharey=True)
+    if n_panels == 1:
+        axes = [axes]
+
+    for ax, ctx in zip(axes, ctx_lengths):
+        ctx_data = curves[ctx]
+        if not ctx_data:
+            ax.set_title(f"{ctx//1024}k — no data")
+            continue
+
+        for base in sorted(ctx_data):
+            for quant in QUANT_ORDER:
+                depth_acc = ctx_data[base].get(quant, {})
+                if not depth_acc:
+                    continue
+                depths = sorted(depth_acc)
+                values = [depth_acc[d] for d in depths]
+                ax.plot(
+                    depths, values,
+                    color=COLORS.get(base, "gray"),
+                    linestyle=QUANT_LINESTYLE.get(quant, "-"),
+                    marker=MARKERS.get(base, "o"),
+                    linewidth=2, markersize=7,
+                    label=f"{base} {quant}",
+                )
+
+        ax.set_title(f"Context length: {ctx//1024}k", fontweight="bold")
+        ax.set_xlabel("Needle depth (%)\n(10% = near document start, 90% = near end)")
+        ax.set_xlim(0, 100)
         ax.set_ylim(0, 100)
-    
-    fig.suptitle("Figure 3: Long-Context Retrieval (NIAH) - Main Experimental Result", 
-                 fontsize=12, fontweight='bold')
+        ax.set_xticks([10, 30, 50, 70, 90])
+        ax.grid(True, alpha=0.3)
+
+    axes[0].set_ylabel("S-RT Accuracy (%)")
+
+    # Unified legend using proxy artists (avoids duplicate labels across panels)
+    arch_handles = [
+        mlines.Line2D([], [], color=COLORS[b], marker=MARKERS[b],
+                      linewidth=2, markersize=8, label=b)
+        for b in ["Qwen3", "Qwen3.5"] if b in COLORS
+    ]
+    quant_handles = [
+        mlines.Line2D([], [], color="gray", linestyle=QUANT_LINESTYLE[q],
+                      linewidth=2, label=q)
+        for q in QUANT_ORDER
+    ]
+    fig.legend(handles=arch_handles + quant_handles,
+               loc="lower center", ncol=len(arch_handles) + len(quant_handles),
+               bbox_to_anchor=(0.5, -0.08), frameon=True)
+
+    fig.suptitle(
+        "Figure 4: S-RT Accuracy by Needle Depth — Architectural Depth-Degradation\n"
+        "Hypothesis: GDN (Qwen3.5) compounds quantization error at shallow depths",
+        fontsize=12, fontweight="bold",
+    )
     plt.tight_layout()
-    plt.savefig(FIGURES_DIR / "figure3_niah.png", dpi=150)
-    plt.savefig(FIGURES_DIR / "figure3_niah.pdf")
-    print(f"Saved: {FIGURES_DIR / 'figure3_niah.png'}")
-    plt.close()
+    _save(fig, "figure4_depth_degradation")
 
 
-def plot_niah_ablation(results):
-    """Plot NIAH position ablation results (Figure 4 - secondary analysis)."""
-    if "niah_ablation" not in results or not results["niah_ablation"]:
-        print("No NIAH ablation results found")
+# ══════════════════════════════════════════════════════════════════════════════
+# Figure 5 — Degradation delta (Q8 → Q3)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def plot_deltas(results: dict) -> None:
+    """
+    Bar chart showing accuracy/score drop from Q8 to Q3 per benchmark.
+    Benchmarks: GSM8K (short-context control) and NeedleBench overall.
+
+    A larger delta for Qwen3.5 vs Qwen3 on NeedleBench—but not GSM8K—
+    supports the architecture-specific long-context degradation hypothesis.
+    """
+    benchmarks_to_plot = []
+
+    # --- GSM8K ---
+    if results.get("gsm8k"):
+        per_model: dict = defaultdict(dict)
+        for model_name, result in results["gsm8k"].items():
+            _, base, quant = parse_model_config(model_name)
+            per_model[base][quant] = result.get("accuracy", 0.0) * 100  # [0,1]→%
+
+        deltas = {m: vals.get("Q8", 0) - vals.get("Q3", 0)
+                  for m, vals in per_model.items()
+                  if "Q8" in vals and "Q3" in vals}
+        if deltas:
+            benchmarks_to_plot.append(("GSM8K\n(Q8→Q3 drop)", deltas))
+
+    # --- NeedleBench overall ---
+    if results.get("needlebench"):
+        # Build a fresh per_model dict — do NOT reuse from GSM8K block
+        nb_per_model: dict = defaultdict(dict)
+        for model_name, result in results["needlebench"].items():
+            _, base, quant = parse_model_config(model_name)
+            # composite_scores["Overall"] is in [0,1]
+            score = result.get("composite_scores", {}).get("Overall", None)
+            if score is not None:
+                nb_per_model[base][quant] = score * 100   # → %
+
+        deltas = {m: vals.get("Q8", 0) - vals.get("Q3", 0)
+                  for m, vals in nb_per_model.items()
+                  if "Q8" in vals and "Q3" in vals}
+        if deltas:
+            benchmarks_to_plot.append(("NeedleBench\n(Q8→Q3 drop)", deltas))
+
+    if not benchmarks_to_plot:
+        print("[skip] Figure 5: insufficient Q8+Q3 pairs for delta chart")
         return
-    
-    niah_abl_data = results["niah_ablation"]
-    
-    # Organize data by model, quant, context length, and depth
-    data = defaultdict(lambda: defaultdict(lambda: defaultdict(dict)))
-    
-    for model_name, result in niah_abl_data.items():
-        arch, base, quant = parse_model_config(model_name)
-        
-        for ctx_result in result.get("results", []):
-            ctx_len = ctx_result.get("context_length", 0)
-            acc_by_depth = ctx_result.get("accuracy_by_depth", {})
-            
-            for depth_str, acc in acc_by_depth.items():
-                data[base][quant][ctx_len][depth_str] = acc * 100
-    
-    if not data:
-        print("No valid NIAH ablation data")
-        return
-    
-    # Create subplot for each context length
-    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
-    context_lengths = [4096, 8192]
-    depth_order = ["10%", "25%", "50%", "75%", "90%"]
-    
-    for idx, ctx_len in enumerate(context_lengths):
-        ax = axes[idx]
-        
-        models = sorted(data.keys())
-        x = np.arange(len(depth_order))
-        width = 0.35
-        
-        for i, model in enumerate(models):
-            # Average across quant levels for cleaner view, or pick one
-            # Let's show Q4 as the most interesting case
-            quant = "Q4"
-            values = []
-            for d in depth_order:
-                val = data[model].get(quant, {}).get(ctx_len, {}).get(d, 0)
-                values.append(val)
-            
-            if any(v > 0 for v in values):  # Only plot if we have data
-                offset = width * (i - len(models)/2 + 0.5)
-                ax.bar(x + offset, values, width, label=f"{model} ({quant})")
-        
-        ax.set_xlabel("Needle Depth in Document")
-        ax.set_ylabel("Retrieval Accuracy (%)")
-        ax.set_title(f"Context Length: {ctx_len} tokens")
-        ax.set_xticks(x)
-        ax.set_xticklabels(depth_order)
-        ax.legend()
-        ax.set_ylim(0, 100)
-    
-    fig.suptitle("Figure 4: Position-Dependent Retrieval (NIAH Ablation) - Secondary Analysis", 
-                 fontsize=12, fontweight='bold')
+
+    bench_names = [b[0] for b in benchmarks_to_plot]
+    x     = np.arange(len(bench_names))
+    width = 0.35
+
+    fig, ax = plt.subplots(figsize=(9, 5))
+
+    for i, model in enumerate(["Qwen3", "Qwen3.5"]):
+        values = [bench_data.get(model, 0) for _, bench_data in benchmarks_to_plot]
+        offset = width * (i - 0.5)
+        bars   = ax.bar(x + offset, values, width,
+                        label=model, color=COLORS.get(model, "gray"), alpha=0.85)
+        for bar, val in zip(bars, values):
+            if val != 0:
+                ax.annotate(f"{val:.1f}",
+                            xy=(bar.get_x() + bar.get_width() / 2, bar.get_height()),
+                            xytext=(0, 3), textcoords="offset points",
+                            ha="center", va="bottom", fontsize=9)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(bench_names, fontsize=11)
+    ax.set_ylabel("Accuracy Drop (percentage points)")
+    ax.set_title("Figure 5: Quantisation Degradation Q8 → Q3\n"
+                 "A larger NeedleBench drop for Qwen3.5 supports the GDN hypothesis",
+                 fontweight="bold")
+    ax.legend()
+    ax.grid(True, axis="y", alpha=0.3)
     plt.tight_layout()
-    plt.savefig(FIGURES_DIR / "figure4_niah_ablation.png", dpi=150)
-    plt.savefig(FIGURES_DIR / "figure4_niah_ablation.pdf")
-    print(f"Saved: {FIGURES_DIR / 'figure4_niah_ablation.png'}")
-    plt.close()
+    _save(fig, "figure5_deltas")
 
 
-def print_summary_table(results):
-    print("\n" + "=" * 80)
-    print("BENCHMARK SUMMARY")
-    print("=" * 80)
-    
-    # Perplexity
-    if "perplexity" in results and results["perplexity"]:
-        print("\nPerplexity (lower is better):")
+# ══════════════════════════════════════════════════════════════════════════════
+# Console summary table
+# ══════════════════════════════════════════════════════════════════════════════
+
+def print_summary_table(results: dict) -> None:
+    sep = "=" * 80
+    print(f"\n{sep}\nBENCHMARK SUMMARY\n{sep}")
+
+    if results.get("perplexity"):
+        print("\nWikiText-103 Perplexity (lower = better):")
         print("-" * 60)
-        for model_name in sorted(results["perplexity"].keys()):
-            result = results["perplexity"][model_name]
-            ppl = result.get("perplexity", float('nan'))
-            print(f"  {model_name:30s}: {ppl:.2f}")
-    
-    # GSM8K
-    if "gsm8k" in results and results["gsm8k"]:
-        print("\nGSM8K Accuracy (higher is better):")
+        for name in sorted(results["perplexity"]):
+            ppl = results["perplexity"][name].get("perplexity", float("nan"))
+            print(f"  {name:40s}: {ppl:.2f}")
+
+    if results.get("gsm8k"):
+        print("\nGSM8K Accuracy — 250 samples (higher = better):")
         print("-" * 60)
-        for model_name in sorted(results["gsm8k"].keys()):
-            result = results["gsm8k"][model_name]
-            acc = result.get("accuracy", 0) * 100
-            correct = result.get("correct", 0)
-            total = result.get("total", 0)
-            print(f"  {model_name:30s}: {acc:.1f}% ({correct}/{total})")
-    
-    # NIAH
-    if "niah" in results and results["niah"]:
-        print("\nNIAH Retrieval Accuracy (higher is better):")
+        for name in sorted(results["gsm8k"]):
+            r   = results["gsm8k"][name]
+            acc = r.get("accuracy", 0.0) * 100  # [0,1] → %
+            c, t = r.get("correct", 0), r.get("total", 0)
+            print(f"  {name:40s}: {acc:.1f}%  ({c}/{t})")
+
+    if results.get("needlebench"):
+        print("\nNeedleBench Results (higher = better; all scores × 100 for display):")
         print("-" * 60)
-        for model_name in sorted(results["niah"].keys()):
-            result = results["niah"][model_name]
-            print(f"  {model_name}:")
-            for ctx_result in result.get("results", []):
-                ctx_len = ctx_result.get("context_length", 0)
-                acc = ctx_result.get("accuracy", 0) * 100
-                correct = ctx_result.get("correct", 0)
-                total = ctx_result.get("total", 0)
-                print(f"    {ctx_len} tokens: {acc:.1f}% ({correct}/{total})")
-    
-    print("\n" + "=" * 80)
+        for name in sorted(results["needlebench"]):
+            result    = results["needlebench"][name]
+            composite = result.get("composite_scores", {})
+
+            # composite_scores stores [0,1] values — multiply by 100 for display
+            overall = composite.get("Overall", 0.0) * 100
+            s_rt    = composite.get("S-RT",    0.0) * 100
+            m_rt    = composite.get("M-RT",    0.0) * 100
+            m_rs    = composite.get("M-RS",    0.0) * 100
+
+            print(f"\n  {name}")
+            print(f"    Overall : {overall:.2f}%  "
+                  f"(S-RT {s_rt:.1f}% | M-RT F1 {m_rt:.1f}% | M-RS {m_rs:.1f}%)")
+
+            for task in ["S-RT", "M-RT", "M-RS"]:
+                task_results = result.get("tasks", {}).get(task, [])
+                if not task_results:
+                    continue
+                metric = "f1" if task == "M-RT" else "accuracy"
+                print(f"    {task}:")
+                for r in task_results:
+                    ctx   = r.get("context_length", 0)
+                    score = r.get(metric, 0.0) * 100   # [0,1] → %
+                    print(f"      {ctx//1024}k: {score:.1f}%")
+
+                    # Print depth breakdown if present
+                    bd = r.get("depth_breakdown", {})
+                    if bd:
+                        for dlabel, dstats in sorted(
+                            bd.items(), key=lambda x: int(x[0].rstrip("%"))
+                        ):
+                            dm = "f1" if task == "M-RT" else "accuracy"
+                            dscore = dstats.get(dm, 0.0) * 100
+                            print(f"        depth {dlabel}: {dscore:.1f}%")
+
+    print(f"\n{sep}")
 
 
-def main():
+# ══════════════════════════════════════════════════════════════════════════════
+# Utilities
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _save(fig: plt.Figure, stem: str) -> None:
+    for ext in ("png", "pdf"):
+        path = FIGURES_DIR / f"{stem}.{ext}"
+        fig.savefig(path, dpi=150, bbox_inches="tight")
+    print(f"  Saved: {FIGURES_DIR / stem}.{{png,pdf}}")
+    plt.close(fig)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Main
+# ══════════════════════════════════════════════════════════════════════════════
+
+def main() -> None:
     print("Loading benchmark results...")
     results = load_all_results()
-    
+
     if not any(results.values()):
-        print("No results found. Run benchmarks first.")
+        print("No results found in results/completed/. Run benchmarks first.")
         return
-    
-    # Print summary
+
     print_summary_table(results)
-    
-    # Generate figures
+
     print("\nGenerating figures...")
-    plot_perplexity(results)
-    plot_gsm8k(results)
-    plot_niah(results)
-    plot_niah_ablation(results)  # New ablation figure
-    
-    print(f"\nFigures saved to: {FIGURES_DIR}/")
-    print("  - figure1_perplexity.png")
-    print("  - figure2_gsm8k.png")
-    print("  - figure3_niah.png (main result)")
-    print("  - figure4_niah_ablation.png (position ablation)")
+    plot_perplexity(results)          # Figure 1
+    plot_gsm8k(results)               # Figure 2
+    plot_needlebench_heatmap(results) # Figure 3
+    plot_depth_degradation(results)   # Figure 4 — THESIS FIGURE
+    plot_deltas(results)              # Figure 5
+
+    print(f"\nAll figures saved to: {FIGURES_DIR}/")
 
 
 if __name__ == "__main__":

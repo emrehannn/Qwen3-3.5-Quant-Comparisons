@@ -4,7 +4,7 @@ Retries indefinitely until all models are successfully downloaded.
 """
 import os
 import time
-import sys
+import sys  
 from pathlib import Path
 
 # NOTE: If downloads STILL freeze at ~185k after clearing the .cache folder, 

@@ -51,7 +51,7 @@ def test_model(name: str, path: str):
         prompt=prompt,
         max_tokens=512,
         temperature=0.0,
-        stop=["<|im_start|>", "Question:"],
+        stop=["<|im_start|>", "<|im_end|>", "Question:"],
     )
     
     generated = output["choices"][0]["text"]

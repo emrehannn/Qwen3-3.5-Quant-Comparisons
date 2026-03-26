@@ -105,14 +105,10 @@ def extract_answer(text: str) -> float | None:
     # Find all numbers and take the last one
     numbers = re.findall(r"-?\d+(?:\.\d+)?", text_clean)
     if numbers:
-        # Filter out small numbers that might be step numbers (e.g., "Step 1")
-        # and look for numbers that appear after the main reasoning
+        # Return the last number in the text as a last resort
         for num in reversed(numbers):
             try:
-                val = float(num)
-                # Skip very small integers that might be step indicators
-                if val >= 0 or len(numbers) == 1:
-                    return val
+                return float(num)
             except ValueError:
                 continue
     
@@ -128,6 +124,7 @@ def evaluate_gsm8k(model_path: str, limit: int = 250, n_ctx: int = 2048) -> dict
         model_path=model_path,
         n_gpu_layers=-1,  # Full GPU offloading
         n_ctx=n_ctx,
+        flash_attn=True,
         verbose=False,
     )
     
@@ -155,7 +152,7 @@ def evaluate_gsm8k(model_path: str, limit: int = 250, n_ctx: int = 2048) -> dict
             prompt=prompt,
             max_tokens=512,
             temperature=0.0,
-            stop=["<|im_start|>", "Question:"],
+            stop=["<|im_start|>", "<|im_end|>", "Question:"],
         )
         
         generated_text = output["choices"][0]["text"]

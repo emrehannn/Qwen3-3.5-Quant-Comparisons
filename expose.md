@@ -1,242 +1,104 @@
-
-
 A Diagnostic Study of Architectural Failure Modes in Quantizations of Transformer and Gated Delta Networks (GDN) Architectures
-
-
-"Quantization is a rapidly evolving field. While theoretical advances like TurboQuant (Zandieh et al., 2025) push toward information-theoretic optimality, the practical community still relies on GGUF/GPTQ methods. This paper empirically characterizes the capability tradeoffs of existing open source grade  post-training quantization approaches as a baseline against future methods."
-
-Or
-
-"Recent theoretical advancements have sought to solve the long-context memory wall dynamically, with methods like TurboQuant (Zandieh et al., 2025) achieving near-lossless KV cache compression. However, for local deployment on consumer hardware, the primary bottleneck remains the static weight quantization of the model itself. Therefore, rather than addressing activation memory, this paper isolates the structural vulnerabilities of hybrid GDN architectures when subjected to standard post-training weight quantization (GGUF)."
-
-—
-
-Qwen3 is a full attention transformer model.
-
-Qwen3.5 is a 3:1 GDN + full attention mix model.
-
-Quantization errors can compound over time in GDN layers, making quantization more degrading. RQ:
-MAIN RQ: Focus on the Architecture Trade-off: * "How does weight quantization impact the long-context retrieval degradation of hybrid Gated DeltaNet architectures compared to pure Transformers?"
-SUB RQs to maybe mention:
-Focus on the Hidden State Vulnerability: * "Analyzing the sensitivity of recurrent hidden states: A comparative study of quantization effects on Qwen 3 and Qwen 3.5."
-Focus on Deployment Practicality: * "Does the GDN architecture trade quantization resilience for inference efficiency in resource-constrained environments?"
-Something like this should be in the paper, otherwise benchmarking small models on small gpus is only worth a footnote rather than a paper. Why the Small-Scale Regime Deserves Its Own Study We anticipate the objection: why not just read off small-scale behavior from large-scale results? Three reasons: 1. **Inductive biases are capacity-dependent.** At large scale, surplus parameters absorb structural weaknesses. At 4B parameters, there is no surplus — a model that cannot retrieve distant tokens will fail visibly, not gracefully. 2. **Efficiency claims are hardware-dependent.** Mamba's kernel efficiency on an A100 does not transfer directly to an RTX 4060 with different memory bandwidth and CUDA core counts. Consumer GPU profiling requires consumer GPU experiments. 3. **Practitioners cannot extrapolate from scale.** A researcher with an RTX 4060 and six weeks cannot replicate a 7B-parameter comparison. They need results at their actual scale. The absence of such results is not a footnote — it is a practical barrier.
-
-Suggested Paper Structure (6-7 Pages)
-Introduction & Research Question (1 page): Introduce the shift from pure Transformers to hybrid MoE/GDN architectures for local deployment, cite GDN, MoE, Qwen. 
-
- Hybrid architectures are emerging for local deployment; quantization behavior in recurrent components is unstudied; here's why it matters
-
-
-
-
-
-
-
-Architectural Background (1-1.5 pages): Briefly explain standard attention vs. GDN's recurrent hidden state, and how quantization interacts with both.
-
-
- Attention vs. GDN mechanics; how quantization interacts with each; brief note on TurboQuant as context for why this field is moving fast and floating point quantization might even become outdated with KV activation compression
-
-
-
-
-
-
-
-Methodology (1 page): Qwen 3.5-4b Q8 Q4 Q3 vs Qwen3-4b Q8 Q4 Q3
-Two models: Qwen3-4B (pure attention) and Qwen3.5-4B (3:1 GDN/attention hybrid), each evaluated at Q8_0, Q4_K_M, and Q3_K_M quantization via GGUF. Benchmarks: WikiText-103 perplexity, GSM8K (short-context reasoning control), and a custom NIAH implementation at 4k and 8k context lengths. All experiments run locally on RTX 4060 8GB.
-Pure attention baseline	unsloth/Qwen3-4B-Instruct-2507-GGUF
-GDN hybrid			unsloth/Qwen3.5-4B-GGUF 
-Quant files to pull for each: Q8_0 (or UD-Q8_K_XL), Q4_K_M, Q3_K_M. Both repos have all three.
-
-
-Model 1 — unsloth/Qwen3-4B-Instruct-2507-GGUF
-Available quants confirmed: Q8_0 (4.28 GB), Q4_K_M (2.6 GB), UD-Q3_K_XL (2.13 GB) Promwad
-Purpose
-Filename
-Size
-High-quality baseline
-Qwen3-4B-Instruct-2507-Q8_0.gguf
-4.28 GB
-Practical deployment
-Qwen3-4B-Instruct-2507-Q4_K_M.gguf
-2.60 GB
-Stress test
-Qwen3-4B-Instruct-2507-UD-Q3_K_XL.gguf
-2.13 GB
-
-Model 2 — unsloth/Qwen3.5-4B-GGUF
-Available quants confirmed: Q8_0 (4.48 GB), Q4_K_M (2.74 GB), Q3_K_M (2.29 GB) Google
-Purpose
-Filename
-Size
-High-quality baseline
-Qwen3.5-4B-Q8_0.gguf
-4.48 GB
-Practical deployment
-Qwen3.5-4B-Q4_K_M.gguf
-2.74 GB
-Stress test
-Qwen3.5-4B-Q3_K_M.gguf
-2.29 GB
-
-VRAM Warning for Q8 + Long Context
-Q8 files at 4.28–4.48 GB leave only 3.5–3.7 GB for KV cache on your 8 GB card. At 8k context that will be tight or OOM. The fix: run Q8 only for perplexity and GSM8K (short context, no problem), and use Q4/Q3 for NIAH where you need the context headroom. This is actually a legitimate experimental design — just document it clearly in Methodology.
-
-Q3 quant mismatch — needs one line acknowledging it Qwen3 uses UD-Q3_K_XL and Qwen3.5 uses Q3_K_M. These are different quantization schemes at roughly the same bit depth. Add one line to methodology: "Q3 variants differ by scheme (UD-Q3_K_XL vs Q3_K_M) due to availability; both target approximately 3-bit precision." Otherwise someone will question the comparison.
-
-
-
-
-
-
-CODE TO DOWNLOAD ALL MODELS Total size 18 GB
-import os
-os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"
-from huggingface_hub import hf_hub_download
-
-files = [
-    # Qwen3 4B Instruct 2507
-    ("unsloth/Qwen3-4B-Instruct-2507-GGUF", "Qwen3-4B-Instruct-2507-Q8_0.gguf"),
-    ("unsloth/Qwen3-4B-Instruct-2507-GGUF", "Qwen3-4B-Instruct-2507-Q4_K_M.gguf"),
-    ("unsloth/Qwen3-4B-Instruct-2507-GGUF", "Qwen3-4B-Instruct-2507-UD-Q3_K_XL.gguf"),
-    # Qwen3.5 4B
-    ("unsloth/Qwen3.5-4B-GGUF", "Qwen3.5-4B-Q8_0.gguf"),
-    ("unsloth/Qwen3.5-4B-GGUF", "Qwen3.5-4B-Q4_K_M.gguf"),
-    ("unsloth/Qwen3.5-4B-GGUF", "Qwen3.5-4B-Q3_K_M.gguf"),
-]
-
-for repo, filename in files:
-    hf_hub_download(repo_id=repo, filename=filename, local_dir="./models")
-    print(f"✓ {filename}")
-
-
-
-
-
-
-
-Methodology (1p) — Model pair, quants, benchmarks, hardware, perplexity setup, NIAH setup "Thinking mode was explicitly disabled on both models to ensure outputs reflect base instruction-following capability without extended chain-of-thought generation, enabling a fair architectural comparison."
-Add perplexity as a baseline measurement.
-Before running any task benchmarks, run perplexity on a standard corpus (WikiText-103 or similar) at each quant level for both models. This gives us:
-A model-agnostic baseline showing raw information loss per quant step
-A way to check if Qwen3.5 loses more perplexity per bit than Qwen3 ,  which would be early evidence for our hypothesis
-One clean figure that immediately visualizes the degradation curve
-And we can then say: "Perplexity is comparable across both architectures at each quant level [Figure 1], ruling out differences in quantization quality as a confound. Despite this, Qwen3.5 shows disproportionate degradation on long-context retrieval [Figure 2]..."
-
-⚠️ **Perplexity Interpretation Caveat**: Perplexity was evaluated on WikiText-103 using Unsloth GGUFs; results should be interpreted with caution as Unsloth's imatrix calibration prioritizes long-context chat and tool-calling tasks over standard text corpora. This may result in higher perplexity scores than other quantizers while potentially maintaining better performance on real-world long-context tasks.
-
-It takes 20 minutes to run and costs us nothing experimentally.
-Needle-in-a-Haystack (NIAH) — This is the perfect benchmark for the hypothesis. It directly tests retrieval of a fact buried in a long context. If GDN hidden states compound quantization error, NIAH at 8k–16k context is where it will show. And critically, it's easy to run locally with a script
-
-**Dual NIAH Methodology (Standard + Ablation):**
-We run NIAH twice per model configuration to isolate position-dependent effects:
-
-1. **Standard NIAH (Random Placement)** — Primary result comparable to literature
-   - 30 random needle positions per context length (4k, 8k)
-   - Tests general long-context retrieval capability
-   - Figure 2: Overall accuracy by quant level
-
-2. **Position Ablation (Fixed Depths)** — Secondary analysis for GDN hypothesis
-   - Needles placed at fixed depths: 10%, 25%, 50%, 75%, 90% through document
-   - 6 trials per depth = 30 total positions per context length
-   - Small jitter (±2%) avoids structural artifacts in filler text
-   - Tests hypothesis: GDN compounds error over distance, so early needles (10%) in long contexts should show worst degradation
-   - Figure 3: Accuracy by needle depth × quant level
-
-This design gives us both methodological validity (random = standard) and mechanistic insight (fixed = ablation). If GDN hidden states compound quantization error, we expect Qwen3.5 to show accuracy drops specifically at 10% depth in 8k contexts — where the recurrent state must carry information furthest — while Qwen3 (pure attention) should show flat or random patterns.
-
-GSM8K— Multi-step reasoning chains stress the model's ability to maintain coherent state over many tokens. Good secondary.
-Final Recommendation: 3 Benchmarks, Not 2
-Perplexity → GSM8K → NIAH
-Think of them as three layers:
-Perplexity — "how much raw information is lost per quant step?" (20 min to run, gives us a clean opening figure)
-GSM8K — "does quantization hurt short sequential reasoning?" (our control condition)
-NIAH — "does quantization hurt long-context retrieval?" (our experimental condition)
-The story writes itself: "Perplexity shows comparable information loss between architectures. GSM8K shows comparable short-context degradation. But NIAH reveals a divergence at Q3/Q4 that is unique to the GDN model — consistent with compounding recurrent error over sequence length."
-
-The minimum viable experimental core is:
-2 models (Qwen3 xB vs Qwen3.5 xB, same size if possible)
-3 quant level- Q8 Q4 Q3
-4 benchmarks — perplexity, GSM8K, NIAH (random), NIAH ablation (fixed positions)
-2 context lengths for NIAH — 4k and 8k. Drop 16k on a laptop, it'll take forever and potentially OOM
-That's 6 model configs × 4 benchmarks = 24 runs total.
-
-Rough estimates based on a 4060 laptop (8GB) with 4B GGUF models, ~25–35 tok/s at Q4:
-**WikiText-103 Perplexity**
-Just forward passes, no generation. Fast.
-- ~20 min per config × 6 configs = **~2 hours total**
-**GSM8K**
-This is the dangerous one. 1,319 test problems, ~200 tokens of output each.
-- ~3–4 hours per config at Q4, longer at Q8
-- 6 configs × 3.5 hours = **~21 hours unthrottled**
-You need to add `--limit 250` to lm-eval. That cuts it to:
-- ~45 min per config × 6 = **~4.5 hours total**
-250 samples is statistically fine for a mini paper, just note it in Methodology.
-**NIAH (Dual Runs)**
-We run NIAH twice per model: standard random placement (main result) and fixed-position ablation (secondary analysis).
-- ~30–45 min per config × 6 configs × 2 runs = **~7 hours total**
-  - Random placement: 3.5 hours
-  - Fixed-position ablation: 3.5 hours
-
-## Total
-
-| Benchmark | Total |
-| Perplexity | ~2 hrs |
-| GSM8K (--limit 250) | ~4.5 hrs |
-| NIAH (random) | ~3.5 hrs |
-| NIAH ablation (fixed) | ~3.5 hrs |
-| Buffer for OOMs, reloading, misc | ~2 hrs |
-| **Total** | **~16 hours** |
-
-Run everything overnight across 2 nights and you're done with compute by day 3. The key is queuing runs back-to-back in a script so you're not babysitting it.
-
-Results (1-1.5 pages): Present the data. (This is where we show the "capability cliff" where the GDN model's performance drops off).
-
-
-
-Results (1.5p) — Lead with the NIAH degradation curves (this is our money figure), then perplexity, then task benchmarks
-
-Discussion & Conclusion (1-1.5 pages): Explain why the data looks the way it does based on the compounding quantization errors in the GDN layer
-
-
-Discussion (1p) — Does the data support compounding error in GDN? Where did Qwen3.5 hold up better or worse than expected? Implications for deployment
-
-
-Conclusion + Limitations (0.5p) ???
-
-
-
-
-References:
-
-Here are all the citations you need, properly formatted, with important caveats flagged.
-
-⚠️ Critical Finding: No Qwen3.5 Technical Report Exists
-The NVlabs GatedDeltaNet GitHub repo confirms: "Gated DeltaNet is powering the incredible Qwen3.5 model" (February 17, 2026) — but as of today there is no standalone Qwen3.5 arXiv paper. This matters for your citations. You'll cite the HuggingFace model card directly for Qwen3.5 architecture claims.
-The 3:1 ratio is confirmed by the architecture config: every 4th layer is full attention, making approximately 75% of layers linear (GDN) and 25% full softmax attention.
-
-Your Full Citation List
-APA Format 
-[1] Qwen3 — your baseline model
-Yang, A., Li, A., Yang, B., Zhang, B., Hui, B., Zheng, B., ... & Qwen Team. (2025). Qwen3 Technical Report. arXiv:2505.09388. https://arxiv.org/abs/2505.09388
-[2] Qwen3.5 — your GDN hybrid model (no paper, cite model card)
-Qwen Team. (2026). Qwen3.5-4B [Model card]. Hugging Face. https://huggingface.co/Qwen/Qwen3.5-4B
-[3] Gated DeltaNet — the architecture powering Qwen3.5
-Yang, S., Kautz, J., & Hatamizadeh, A. (2024). Gated Delta Networks: Improving Mamba2 with Delta Rule. arXiv:2412.06464. ICLR 2025. https://arxiv.org/abs/2412.06464
-[4] TurboQuant — SOTA Bleeding edge
-Zandieh, A., Daliri, M., Hadian, M., & Mirrokni, V. (2025). TurboQuant: Online Vector Quantization with Near-optimal Distortion Rate. arXiv:2504.19874. https://arxiv.org/abs/2504.19874
-[5] GGUF quantization format — cite llama.cpp
-Gerganov, G. et al. (2023). llama.cpp [Software]. GitHub. https://github.com/ggerganov/llama.cpp
-[6] GSM8K benchmark
-Cobbe, K., Kosaraju, V., Bavarian, M., Chen, M., Jun, H., Kaiser, L., ... & Schulman, J. (2021). Training Verifiers to Solve Math Word Problems. arXiv:2110.14168.
-[7] WikiText-103
-Merity, S., Xiong, C., Bradbury, J., & Socher, R. (2016). Pointer Sentinel Mixture Models. arXiv:1609.07843.
-
-How to Cite the 3:1 Ratio Claim in the Paper
-Since there's no Qwen3.5 technical report, write it this way:
-"Qwen3.5 employs a hybrid architecture interleaving Gated DeltaNet (Yang et al., 2024) layers with full softmax attention at a 3:1 ratio — one full attention layer per every three linear attention layers — as specified in the model's architecture configuration (Qwen Team, 2026)."
-That covers you with [2] and [3] together, which is the correct attribution.
-
-
+1. Introduction
+Recent theoretical advancements have sought to solve the long-context memory wall dynamically, with methods like TurboQuant (Zandieh et al., 2025) achieving near-lossless KV cache compression. However, for local deployment on consumer hardware, the primary bottleneck remains the static weight quantization of the model itself. Therefore, rather than addressing activation memory, this paper isolates the structural vulnerabilities of hybrid GDN architectures when subjected to standard post-training weight quantization (GGUF).
+This study compares Qwen3, a baseline full-attention Transformer, against Qwen3.5, a hybrid architecture utilizing a 3:1 ratio of Gated Delta Networks (GDN) to standard attention. We hypothesize that quantization errors compound over sequential steps within GDN layers, leading to disproportionate degradation in long-context retrieval compared to pure attention mechanisms.
+2. Research Questions
+Primary Research Question:
+How does weight quantization impact the long-context retrieval degradation of hybrid Gated DeltaNet architectures compared to pure Transformers?
+Secondary Research Questions:
+Hidden State Vulnerability: How sensitive are recurrent hidden states to quantization effects when comparing Qwen3 and Qwen3.5?
+Deployment Practicality: Does the GDN architecture trade quantization resilience for inference efficiency in resource-constrained environments?
+Literature Review
+1. On Positional Decay (The "Lost in the Middle" Phenomenon)
+The hypothesis that information degrades based on its relative position within the context window is supported by Liu et al. (2023) in their foundational paper "Lost in the Middle." They demonstrated that Transformer-based LLMs exhibit a "U-shaped" performance curve, where they excel at retrieving information at the very beginning or end of a sequence but suffer catastrophic performance drops when retrieving facts buried in the middle of the document. For recurrent or hybrid architectures like GDN, this positional degradation is theoretically exacerbated because the fixed-size hidden state must continuously compress and overwrite prior sequence data, leading to a decay of early-sequence information as the sequence progresses (Yang et al., 2024).
+2. On Context Overload (Absolute Capacity Limits)
+Independent of positional bias, models also suffer from absolute context overload, where the sheer volume of tokens exceeds the model's effective retrieval capacity. The NeedleBench framework (Li et al., 2024) specifically evaluates this by testing models across escalating sequence lengths (e.g., 4k, 8k, 32k). As Li et al. note, a model's theoretical context window (e.g., 32k) often vastly exceeds its effective context window. Kamradt (2023), who pioneered the Needle-in-a-Haystack methodology, established the standard of testing a 2D matrix of "Context Length" versus "Document Depth" precisely to untangle these two variables: whether a model fails because the target information is poorly positioned (positional decay), or simply because the total context volume has saturated the model's attention mechanism (context overload).
+
+3. Justification for the Small-Scale Regime
+We anticipate the objection of why one cannot simply extrapolate small-scale behavior from large-scale results. This study focuses on the 4B parameter scale on consumer hardware for three reasons:
+Inductive biases are capacity-dependent. At large scale, surplus parameters absorb structural weaknesses. At 4B parameters, there is no surplus—a model that cannot retrieve distant tokens will fail visibly, not gracefully.
+Efficiency claims are hardware-dependent. Kernel efficiency on an A100 does not transfer directly to an RTX 4060 with different memory bandwidth and CUDA core counts. Consumer GPU profiling requires consumer GPU experiments.
+Practitioners cannot extrapolate from scale. A researcher or practitioner deploying locally on an RTX 4060 needs empirical results at their actual scale and hardware constraints.
+4. Methodology and Study Design
+4.1. Models and Quantization
+Two base models are evaluated: Qwen3-4B (pure attention) and Qwen3.5-4B (3:1 GDN/attention hybrid). Each is evaluated at Q8_0, Q4_K_M, and ~Q3 quantization via GGUF. All experiments run locally on a consumer RTX 4060 8GB using flash attention and optimized batching to permit full 16k context evaluation.
+Note on generation constraints: "Thinking mode" was explicitly disabled on both models to ensure outputs reflect base instruction-following capability without extended chain-of-thought generation, enabling a fair architectural comparison.
+Model 1: Qwen3-4B (Pure Attention Baseline)
+| Purpose | Filename | Size |
+|---|---|---|
+| High-quality baseline | Qwen3-4B-Instruct-2507-Q8_0.gguf | 4.28 GB |
+| Practical deployment | Qwen3-4B-Instruct-2507-Q4_K_M.gguf | 2.60 GB |
+| Stress test | Qwen3-4B-Instruct-2507-UD-Q3_K_XL.gguf | 2.13 GB |
+Model 2: Qwen3.5-4B (GDN Hybrid)
+| Purpose | Filename | Size |
+|---|---|---|
+| High-quality baseline | Qwen3.5-4B-Q8_0.gguf | 4.48 GB |
+| Practical deployment | Qwen3.5-4B-Q4_K_M.gguf | 2.74 GB |
+| Stress test | Qwen3.5-4B-Q3_K_M.gguf | 2.29 GB |
+Quantization Mismatch Note: The Q3 variants differ slightly by scheme (UD-Q3_K_XL vs. Q3_K_M) due to upstream availability; both target approximately 3-bit precision.
+4.2. Evaluation Benchmarks
+1. Perplexity (Information Loss Baseline):
+Evaluated on WikiText-103. This provides a model-agnostic baseline showing raw information loss per quantization step. This allows us to rule out differences in underlying quantization quality as a confounder.
+(Caveat: Evaluated using Unsloth GGUFs; results should be interpreted with caution as Unsloth's imatrix calibration prioritizes chat/tool-calling tasks over standard text corpora).
+2. GSM8K (Short-Context Control):
+Multi-step reasoning chains stress the model's ability to maintain coherent state over many tokens. Capped at 250 samples, this serves as a short-context reasoning control to ensure the quantization itself has not destroyed the model's foundational logic.
+3. OpenCompass NeedleBench (Long-Context Experimental Condition):
+Utilizes the official NeedleBench framework (Li et al., 2024) to test long-context retrieval and reasoning across varying information densities. We evaluate three distinct tasks:
+S-RT (Single-Needle Retrieval): Pure retrieval of a single fact.
+M-RT (Multi-Needle Retrieval): Sustained attention across distant tokens to retrieve multiple facts.
+M-RS (Multi-Fact Reasoning): Retrieving multiple derivations and logically combining them.
+The Experimental Grid & Failure Mode Isolation:
+Each task is evaluated across a rigid combinatorial grid:
+Context lengths: 4k, 8k, and 16k tokens.
+Depths: Embedded at exactly 10%, 30%, 50%, 70%, and 90% document depth.
+Samples: 50 independent trials per depth configuration.
+By systematically varying both context length and insertion depth, this design isolates two distinct architectural failure modes:
+Context Overload: Evaluated by comparing overall performance across 4k, 8k, and 16k contexts. A uniform collapse at 16k regardless of depth indicates the model's hidden state has saturated simply from the raw volume of prior tokens.
+Positional Decay (The Primary Hypothesis): Evaluated by comparing depths within the same context length. If GDN hidden states compound quantization error over sequence distance, Qwen3.5 should show severe accuracy drops specifically at early depths (e.g., 10%) in long contexts—where the recurrent state must carry information furthest—while the pure attention Qwen3 should maintain a much flatter degradation profile.
+Scale: 3 tasks × 3 contexts × 5 depths × 50 samples = 2,250 evaluations per model. Across 6 model configurations, this yields 13,500 individual long-context evaluations.
+5. Compute Estimates (RTX 4060 8GB)
+Benchmark
+Est. Time per config
+Total Time (6 configs)
+WikiText-103 Perplexity
+~15-20 min
+~2 hours
+GSM8K (--limit 250)
+~45 min
+~4.5 hours
+NeedleBench (S-RT, M-RT, M-RS at 16k)
+~170 min (2.8 hrs)
+~17 hours
+Total Empirical Compute
+
+
+~23.5 - 25 hours
+
+6. Proposed Paper Outline (6-7 Pages)
+Introduction & Research Question (1 page): Shift from pure Transformers to hybrid architectures for local deployment; unstudied quantization behavior in recurrent components.
+Architectural Background (1-1.5 pages): Standard attention vs. GDN's recurrent hidden state mechanics; interactions with quantization.
+Methodology (1 page): Details of models, quants, benchmarks, and hardware setup, highlighting the isolation of Context Overload vs. Positional Decay.
+Results (1.5 pages): Presentation of empirical data, leading with NeedleBench degradation curves and depth-ablation findings.
+Discussion (1 page): Analysis of compounding quantization errors; implications for local deployment on consumer GPUs.
+Conclusion & Limitations (0.5 pages).
+7. References
+$$1$$
+Yang, A., Li, A., Yang, B., Zhang, B., Hui, B., Zheng, B., ... & Qwen Team. (2025). Qwen3 Technical Report. arXiv preprint arXiv:2505.09388. https://arxiv.org/abs/2505.09388
+$$2$$
+Qwen Team. (2026). Qwen3.5-4B
+$$Model card$$
+. Hugging Face. https://huggingface.co/Qwen/Qwen3.5-4B
+$$3$$
+Yang, S., Kautz, J., & Hatamizadeh, A. (2024). Gated Delta Networks: Improving Mamba2 with Delta Rule. arXiv preprint arXiv:2412.06464. ICLR 2025. https://arxiv.org/abs/2412.06464
+$$4$$
+Zandieh, A., Daliri, M., Hadian, M., & Mirrokni, V. (2025). TurboQuant: Online Vector Quantization with Near-optimal Distortion Rate. arXiv preprint arXiv:2504.19874. https://arxiv.org/abs/2504.19874
+$$5$$
+Gerganov, G. et al. (2023). llama.cpp
+$$Software$$
+. GitHub. https://github.com/ggerganov/llama.cpp
+$$6$$
+Cobbe, K., Kosaraju, V., Bavarian, M., Chen, M., Jun, H., Kaiser, L., ... & Schulman, J. (2021). Training Verifiers to Solve Math Word Problems. arXiv preprint arXiv:2110.14168.
+$$7$$
+Merity, S., Xiong, C., Bradbury, J., & Socher, R. (2016). Pointer Sentinel Mixture Models. arXiv preprint arXiv:1609.07843.
+$$8$$
+Li, M., Zhang, S., Liu, Y., & Chen, K. (2024). NeedleBench: Can LLMs Do Retrieval and Reasoning in 1 Million Context Window?. arXiv preprint arXiv:2407.11963. https://arxiv.org/abs/2407.11963

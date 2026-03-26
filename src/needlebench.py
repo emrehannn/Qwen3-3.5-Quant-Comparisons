@@ -1,0 +1,578 @@
+"""
+NeedleBench: Long-context Retrieval and Reasoning Benchmark
+
+Based on "NeedleBench: Can LLMs Do Retrieval and Reasoning in Information-Dense Context?"
+Paper: arXiv:2407.11963
+
+Implements the official NeedleBench evaluation tasks:
+    - S-RT (Single Retrieval): One needle inserted at specified depth inside
+      a long haystack built from en_haystack_texts; asks needle's retrieval_question
+    - M-RT (Multi Retrieval): Multiple needles spread from a start depth inside
+      a long haystack; asks each needle's retrieval_question
+    - M-RS (Multi-fact Reasoning): Sample derivations inserted as needles
+      into a long haystack; asks the reasoning question
+
+Metrics — ALL values stored as fractions in [0, 1]. Multiply by 100 for display.
+    - accuracy for S-RT and M-RS  (correct / total)
+    - precision / recall / f1 for M-RT
+    - composite: O = 0.4*S-RT + 0.3*M-RT(f1) + 0.3*M-RS
+
+Depth variation:
+    Every task is evaluated at multiple depth percentages (default 10%-90%).
+    Results carry a `depth_breakdown` dict so architecture-level depth
+    degradation is directly visible in the output JSON and downstream plots.
+
+DATA REQUIREMENT: This benchmark requires the official OpenCompass NeedleBench dataset.
+Dataset downloaded automatically from HuggingFace:
+    https://huggingface.co/datasets/opencompass/NeedleBench
+
+WARNING: This benchmark WILL NOT run without the official dataset.
+         Results based on synthetic data are NOT valid research.
+
+Reference:
+    Li et al. "Can LLMs Do Retrieval and Reasoning in Information-Dense Context?"
+    arXiv:2407.11963 (2024)
+"""
+
+import json
+import Levenshtein
+from pathlib import Path
+from tqdm import tqdm
+from llama_cpp import Llama
+from datasets import load_dataset
+import random
+
+
+TASK_TYPES    = ["S-RT", "M-RT", "M-RS"]
+DEFAULT_DEPTHS = [0.1, 0.3, 0.5, 0.7, 0.9]
+
+
+# ---------------------------------------------------------------------------
+# Dataset loading
+# ---------------------------------------------------------------------------
+
+def load_needlebench_subset(subset, split="test", language_filter=None):
+    """Load one NeedleBench subset from HuggingFace."""
+    print(f"Loading NeedleBench subset: {subset}")
+    print(f"  Source: https://huggingface.co/datasets/opencompass/NeedleBench")
+    try:
+        dataset = load_dataset("opencompass/NeedleBench", subset, split=split)
+    except Exception as e:
+        raise RuntimeError(
+            f"FAILED TO LOAD '{subset}'.\nError: {e}\n\n"
+            f"pip install datasets huggingface_hub\n"
+            f"https://huggingface.co/datasets/opencompass/NeedleBench\n"
+            f"This benchmark WILL NOT RUN with synthetic/fake data."
+        )
+    if language_filter and "language" in dataset.column_names:
+        dataset = dataset.filter(lambda x: x.get("language", "") == language_filter)
+        print(f"  Filtered to '{language_filter}': {len(dataset)} samples")
+    if len(dataset) == 0:
+        raise RuntimeError(f"Subset '{subset}' is empty after filtering.")
+    print(f"  Loaded {len(dataset)} samples")
+    return dataset
+
+
+# ---------------------------------------------------------------------------
+# Scoring — all return values in [0, 1]
+# ---------------------------------------------------------------------------
+
+def levenshtein_soft_score(predicted: str, reference: str) -> float:
+    """
+    score = 1 - d(P, R) / max(|P|, |R|)
+    Returns 1.0 for exact match, 0.0 for completely different. In [0, 1].
+    """
+    if not predicted or not reference:
+        return 0.0
+    pred = predicted.lower().strip()
+    ref  = reference.lower().strip()
+    if pred == ref:
+        return 1.0
+    distance = Levenshtein.distance(pred, ref)
+    max_len  = max(len(pred), len(ref))
+    return max(0.0, 1.0 - distance / max_len) if max_len > 0 else 0.0
+
+
+def calculate_precision_recall_f1(predicted: str, reference: str) -> tuple:
+    """Token-set P/R/F1. All returned values in [0, 1]."""
+    if not predicted or not reference:
+        return 0.0, 0.0, 0.0
+    pred_tokens = set(predicted.lower().split())
+    ref_tokens  = set(reference.lower().split())
+    if not pred_tokens or not ref_tokens:
+        return 0.0, 0.0, 0.0
+    tp        = len(pred_tokens & ref_tokens)
+    precision = tp / len(pred_tokens)
+    recall    = tp / len(ref_tokens)
+    f1        = (2 * precision * recall / (precision + recall)
+                 if (precision + recall) > 0 else 0.0)
+    return precision, recall, f1
+
+
+# ---------------------------------------------------------------------------
+# Tokenisation
+# ---------------------------------------------------------------------------
+
+def _tokenize(llm, text):
+    return llm.tokenize(text.encode("utf-8"))
+
+def _detokenize(llm, tokens):
+    return llm.detokenize(tokens).decode("utf-8", errors="ignore")
+
+
+# ---------------------------------------------------------------------------
+# Haystack construction
+# ---------------------------------------------------------------------------
+
+def _build_haystack_tokens(llm, haystack_texts, target_tokens, rng):
+    shuffled = list(haystack_texts)
+    rng.shuffle(shuffled)
+    tokens = []
+    for text in shuffled:
+        if len(tokens) >= target_tokens:
+            break
+        tokens.extend(_tokenize(llm, text))
+    return tokens[:target_tokens]
+
+
+def build_haystack_with_needle(llm, haystack_texts, needle, target_tokens, depth, rng):
+    """Insert one needle at `depth` fraction into a haystack of ~target_tokens."""
+    needle_tokens   = _tokenize(llm, needle)
+    available       = max(0, target_tokens - len(needle_tokens))
+    haystack_tokens = _build_haystack_tokens(llm, haystack_texts, available, rng)
+    insert_pos      = max(0, min(int(len(haystack_tokens) * depth), len(haystack_tokens)))
+    full_tokens     = haystack_tokens[:insert_pos] + needle_tokens + haystack_tokens[insert_pos:]
+    return _detokenize(llm, full_tokens)
+
+
+def build_haystack_with_multiple_needles(llm, haystack_texts, needles, target_tokens, start_depth, rng):
+    """
+    Insert multiple needles into a haystack.
+    First needle at start_depth; rest spread evenly up to 0.9.
+    Insertion positions are computed against the pre-insertion haystack length
+    to avoid compounding index shifts.
+    """
+    n = len(needles)
+    if n == 0:
+        return _detokenize(llm, _build_haystack_tokens(llm, haystack_texts, target_tokens, rng))
+    if n == 1:
+        depths = [start_depth]
+    else:
+        end_depth = min(0.9, max(start_depth + 0.1, 0.9))
+        depths    = [start_depth + (end_depth - start_depth) * i / (n - 1) for i in range(n)]
+
+    needle_token_lists = [_tokenize(llm, nd) for nd in needles]
+    available          = max(0, target_tokens - sum(len(t) for t in needle_token_lists))
+    haystack_tokens    = _build_haystack_tokens(llm, haystack_texts, available, rng)
+
+    hs_len      = len(haystack_tokens)
+    insert_data = [(max(0, min(int(hs_len * d), hs_len)), t)
+                   for d, t in zip(depths, needle_token_lists)]
+    insert_data.sort(key=lambda x: x[0], reverse=True)   # reverse so indices stay valid
+
+    result = list(haystack_tokens)
+    for pos, ntoks in insert_data:
+        result = result[:pos] + list(ntoks) + result[pos:]
+    return _detokenize(llm, result)
+
+
+# ---------------------------------------------------------------------------
+# Prompt template
+# ---------------------------------------------------------------------------
+
+_PROMPT = (
+    "Below is a long document. Answer the question using only information "
+    "found in the document. Be concise.\n\n"
+    "Document:\n{context}\n\n"
+    "Question: {question}\n"
+    "Answer:"
+)
+
+
+# ---------------------------------------------------------------------------
+# Task evaluators
+# ---------------------------------------------------------------------------
+
+def evaluate_single_retrieval(llm, needle_dataset, haystack_texts,
+                               ctx_len, depth_percentages, num_samples):
+    """
+    S-RT: embed one needle at each depth, ask its retrieval_question.
+    accuracy = correct / total, in [0, 1]. correct if levenshtein_score >= 0.5.
+    """
+    RESERVE = 300
+    indices = list(range(len(needle_dataset)))
+    random.seed(42); random.shuffle(indices)
+    if num_samples is not None:
+        indices = indices[:num_samples]
+
+    results_by_depth = {d: [] for d in depth_percentages}
+    all_results      = []
+    target_tokens    = ctx_len - RESERVE
+
+    for depth in depth_percentages:
+        rng = random.Random(42)
+        for idx in tqdm(indices, desc=f"S-RT @{ctx_len//1024}k depth={int(depth*100)}%"):
+            sample   = needle_dataset[idx]
+            needle   = sample.get("needle", "")
+            question = sample.get("retrieval_question", "")
+            expected = sample.get("gold_standard_answer", "")
+            if not needle or not question or not expected:
+                continue
+
+            context = build_haystack_with_needle(
+                llm, haystack_texts, needle, target_tokens, depth, rng)
+            output  = llm.create_completion(
+                prompt=_PROMPT.format(context=context, question=question),
+                max_tokens=100, temperature=0.0,
+                stop=["\n", "Question:", "Document:"])
+            generated  = output["choices"][0]["text"].strip()
+            score      = levenshtein_soft_score(generated, expected)   # [0,1]
+            is_correct = score >= 0.5
+
+            r = {"depth_percent": int(depth*100), "question": question,
+                 "expected": expected, "predicted": generated,
+                 "score": score, "correct": is_correct}
+            results_by_depth[depth].append(r)
+            all_results.append(r)
+
+    total    = len(all_results)
+    correct  = sum(1 for r in all_results if r["correct"])
+    accuracy = correct / total if total > 0 else 0.0   # [0,1]
+
+    depth_breakdown = {}
+    for d, dr in results_by_depth.items():
+        dt = len(dr); dc = sum(1 for r in dr if r["correct"])
+        depth_breakdown[f"{int(d*100)}%"] = {
+            "accuracy":  dc / dt if dt > 0 else 0.0,                        # [0,1]
+            "avg_score": sum(r["score"] for r in dr) / dt if dt > 0 else 0.0,  # [0,1]
+            "correct": dc, "total": dt,
+        }
+
+    return {"task": "S-RT", "task_description": "Single-Needle Retrieval",
+            "context_length": ctx_len, "accuracy": accuracy,
+            "correct": correct, "total": total,
+            "depth_breakdown": depth_breakdown, "trials": all_results}
+
+
+def evaluate_multi_retrieval(llm, needle_dataset, haystack_texts,
+                              ctx_len, depth_percentages, num_samples,
+                              needles_per_sample=3):
+    """
+    M-RT: embed needles_per_sample needles starting at each depth, ask each question.
+    precision / recall / f1 in [0, 1].
+    """
+    RESERVE = 400
+    indices = list(range(len(needle_dataset)))
+    random.seed(42); random.shuffle(indices)
+
+    groups = [indices[i:i+needles_per_sample]
+              for i in range(0, len(indices)-needles_per_sample+1, needles_per_sample)]
+    if num_samples is not None:
+        groups = groups[:num_samples]
+
+    results_by_depth = {d: [] for d in depth_percentages}
+    all_results      = []
+    target_tokens    = ctx_len - RESERVE
+
+    for depth in depth_percentages:
+        rng = random.Random(42)
+        for group in tqdm(groups, desc=f"M-RT @{ctx_len//1024}k depth={int(depth*100)}%"):
+            samples   = [needle_dataset[i] for i in group]
+            needles   = [s.get("needle", "")               for s in samples]
+            questions = [s.get("retrieval_question", "")   for s in samples]
+            expecteds = [s.get("gold_standard_answer", "") for s in samples]
+            if not all(needles) or not all(questions) or not all(expecteds):
+                continue
+
+            context = build_haystack_with_multiple_needles(
+                llm, haystack_texts, needles, target_tokens, depth, rng)
+
+            ps, rs, fs = [], [], []
+            needle_results = []
+            for question, expected in zip(questions, expecteds):
+                output    = llm.create_completion(
+                    prompt=_PROMPT.format(context=context, question=question),
+                    max_tokens=100, temperature=0.0,
+                    stop=["\n", "Question:", "Document:"])
+                generated = output["choices"][0]["text"].strip()
+                p, r, f   = calculate_precision_recall_f1(generated, expected)  # [0,1]
+                ps.append(p); rs.append(r); fs.append(f)
+                needle_results.append({"question": question, "expected": expected,
+                                       "predicted": generated,
+                                       "precision": p, "recall": r, "f1": f})
+
+            nq = len(needle_results)
+            trial = {"depth_percent": int(depth*100), "needle_count": nq,
+                     "avg_precision": sum(ps)/nq, "avg_recall": sum(rs)/nq,
+                     "avg_f1": sum(fs)/nq, "needle_results": needle_results}
+            results_by_depth[depth].append(trial)
+            all_results.append(trial)
+
+    total = len(all_results)
+    if total == 0:
+        return {"task": "M-RT", "task_description": "Multi-Needle Retrieval",
+                "context_length": ctx_len, "precision": 0.0, "recall": 0.0,
+                "f1": 0.0, "total": 0, "depth_breakdown": {}, "trials": []}
+
+    avg_p  = sum(r["avg_precision"] for r in all_results) / total  # [0,1]
+    avg_r  = sum(r["avg_recall"]    for r in all_results) / total  # [0,1]
+    avg_f1 = sum(r["avg_f1"]        for r in all_results) / total  # [0,1]
+
+    depth_breakdown = {}
+    for d, dr in results_by_depth.items():
+        dt = len(dr)
+        if dt == 0: continue
+        depth_breakdown[f"{int(d*100)}%"] = {
+            "precision": sum(r["avg_precision"] for r in dr) / dt,  # [0,1]
+            "recall":    sum(r["avg_recall"]    for r in dr) / dt,  # [0,1]
+            "f1":        sum(r["avg_f1"]        for r in dr) / dt,  # [0,1]
+            "total": dt,
+        }
+
+    return {"task": "M-RT", "task_description": "Multi-Needle Retrieval",
+            "context_length": ctx_len, "precision": avg_p, "recall": avg_r,
+            "f1": avg_f1, "total": total,
+            "depth_breakdown": depth_breakdown, "trials": all_results}
+
+
+def evaluate_multi_reasoning(llm, reasoning_dataset, haystack_texts,
+                              ctx_len, depth_percentages, num_samples):
+    """
+    M-RS: embed derivations as needles starting at each depth, ask reasoning question.
+    accuracy = correct / total, in [0, 1]. correct if levenshtein_score >= 0.5.
+    """
+    RESERVE = 400
+    indices = list(range(len(reasoning_dataset)))
+    random.seed(42); random.shuffle(indices)
+    if num_samples is not None:
+        indices = indices[:num_samples]
+
+    results_by_depth = {d: [] for d in depth_percentages}
+    all_results      = []
+    target_tokens    = ctx_len - RESERVE
+
+    for depth in depth_percentages:
+        rng = random.Random(42)
+        for idx in tqdm(indices, desc=f"M-RS @{ctx_len//1024}k depth={int(depth*100)}%"):
+            sample      = reasoning_dataset[idx]
+            question    = sample.get("question", "")
+            answer      = sample.get("answer", "")
+            derivations = sample.get("derivations", [])
+            if not question or not answer:
+                continue
+            if isinstance(derivations, str):
+                try:    derivations = json.loads(derivations)
+                except: derivations = [derivations]
+            if not isinstance(derivations, list) or len(derivations) == 0:
+                derivations = [answer]
+
+            context   = build_haystack_with_multiple_needles(
+                llm, haystack_texts, derivations, target_tokens, depth, rng)
+            output    = llm.create_completion(
+                prompt=_PROMPT.format(context=context, question=question),
+                max_tokens=150, temperature=0.0,
+                stop=["\n", "Question:", "Document:"])
+            generated  = output["choices"][0]["text"].strip()
+            score      = levenshtein_soft_score(generated, answer)   # [0,1]
+            is_correct = score >= 0.5
+
+            r = {"depth_percent": int(depth*100), "question": question,
+                 "expected": answer, "predicted": generated,
+                 "score": score, "correct": is_correct,
+                 "derivation_count": len(derivations)}
+            results_by_depth[depth].append(r)
+            all_results.append(r)
+
+    total    = len(all_results)
+    correct  = sum(1 for r in all_results if r["correct"])
+    accuracy = correct / total if total > 0 else 0.0   # [0,1]
+
+    depth_breakdown = {}
+    for d, dr in results_by_depth.items():
+        dt = len(dr); dc = sum(1 for r in dr if r["correct"])
+        depth_breakdown[f"{int(d*100)}%"] = {
+            "accuracy":  dc / dt if dt > 0 else 0.0,                           # [0,1]
+            "avg_score": sum(r["score"] for r in dr) / dt if dt > 0 else 0.0,  # [0,1]
+            "correct": dc, "total": dt,
+        }
+
+    return {"task": "M-RS", "task_description": "Multi-Needle Reasoning",
+            "context_length": ctx_len, "accuracy": accuracy,
+            "correct": correct, "total": total,
+            "depth_breakdown": depth_breakdown, "trials": all_results}
+
+
+# ---------------------------------------------------------------------------
+# Orchestrator
+# ---------------------------------------------------------------------------
+
+def evaluate_needlebench(model_path, context_lengths=None, depth_percentages=None,
+                         num_samples=None, n_gpu_layers=-1, n_batch=256,
+                         tasks=None, needles_per_sample=3):
+    """
+    Run full NeedleBench evaluation.
+
+    Model loaded once at n_ctx = max(context_lengths) with flash_attn=True.
+    All output metrics are in [0, 1].
+    """
+    if context_lengths   is None: context_lengths   = [4096, 8192]
+    if depth_percentages is None: depth_percentages = DEFAULT_DEPTHS
+    if tasks             is None: tasks             = list(TASK_TYPES)
+
+    n_ctx = max(context_lengths)
+
+    print("=" * 70)
+    print("NEEDLEBENCH EVALUATION")
+    print("=" * 70)
+    print(f"Model:             {model_path}")
+    print(f"Context lengths:   {context_lengths}")
+    print(f"Depths:            {[f'{int(d*100)}%' for d in depth_percentages]}")
+    print(f"Tasks:             {tasks}")
+    print(f"Samples cap:       {num_samples if num_samples else 'all'}")
+    print(f"n_ctx:             {n_ctx}")
+    print("=" * 70)
+
+    print("\nLoading model...")
+    try:
+        llm = Llama(model_path=model_path, n_gpu_layers=n_gpu_layers,
+                    n_batch=n_batch, n_ctx=n_ctx, flash_attn=True, verbose=False)
+    except Exception as e:
+        raise RuntimeError(f"Failed to load model '{model_path}': {e}")
+    print("  Model loaded.")
+
+    print("\nLoading datasets...")
+    haystack_ds    = load_needlebench_subset("en_haystack_texts", split="test")
+    haystack_texts = [s["text"] for s in haystack_ds if s.get("text")]
+    needle_ds      = load_needlebench_subset(
+        "retrieval_needles", split="test", language_filter="English")
+    reasoning_ds   = (load_needlebench_subset("multi_needle_reasoning_needle", split="test")
+                      if "M-RS" in tasks else None)
+
+    output = {
+        "model": model_path, "benchmark": "needlebench",
+        "benchmark_source": "https://huggingface.co/datasets/opencompass/NeedleBench",
+        "paper_reference":  "arXiv:2407.11963",
+        "context_lengths_tested":   context_lengths,
+        "depth_percentages_tested": [int(d * 100) for d in depth_percentages],
+        "tasks_evaluated":          tasks,
+        "needles_per_sample_mrt":   needles_per_sample,
+        "tasks":            {},
+        # NOTE: All composite scores in [0, 1]. Multiply by 100 for percentages.
+        "composite_scores": {},
+        "metadata": {"evaluation_time_seconds": None, "num_samples_limit": num_samples},
+    }
+
+    for task in tasks:
+        print(f"\n{'='*60}\nTask: {task}\n{'='*60}")
+        task_results = []
+
+        for ctx_len in context_lengths:
+            print(f"\n  ctx_len={ctx_len} | {len(depth_percentages)} depths × samples...")
+            if task == "S-RT":
+                r = evaluate_single_retrieval(
+                    llm, needle_ds, haystack_texts, ctx_len, depth_percentages, num_samples)
+            elif task == "M-RT":
+                r = evaluate_multi_retrieval(
+                    llm, needle_ds, haystack_texts, ctx_len, depth_percentages,
+                    num_samples, needles_per_sample)
+            elif task == "M-RS":
+                r = evaluate_multi_reasoning(
+                    llm, reasoning_ds, haystack_texts, ctx_len, depth_percentages, num_samples)
+            else:
+                continue
+            task_results.append(r)
+            _print_task_result(r)
+
+        output["tasks"][task] = task_results
+
+        if task in ("S-RT", "M-RS"):
+            key  = "accuracy"
+            vals = [r[key] for r in task_results if key in r]
+        elif task == "M-RT":
+            key  = "f1"
+            vals = [r[key] for r in task_results if key in r]
+        else:
+            vals = []
+        output["composite_scores"][task] = sum(vals)/len(vals) if vals else 0.0  # [0,1]
+
+    s_rt = output["composite_scores"].get("S-RT", 0.0)
+    m_rt = output["composite_scores"].get("M-RT", 0.0)
+    m_rs = output["composite_scores"].get("M-RS", 0.0)
+    output["composite_scores"]["Overall"] = 0.4*s_rt + 0.3*m_rt + 0.3*m_rs  # [0,1]
+
+    print(f"\n{'='*60}\nNEEDLEBENCH RESULTS SUMMARY\n{'='*60}")
+    print(f"S-RT  accuracy : {s_rt*100:.2f}%")
+    print(f"M-RT  F1       : {m_rt*100:.2f}%")
+    print(f"M-RS  accuracy : {m_rs*100:.2f}%")
+    print(f"Overall        : {output['composite_scores']['Overall']*100:.2f}%")
+    print(f"Formula: 0.4·S-RT + 0.3·M-RT + 0.3·M-RS\n{'='*60}")
+
+    return output
+
+
+def _print_task_result(result):
+    task = result.get("task", "?")
+    ctx  = result.get("context_length", 0)
+    bd   = result.get("depth_breakdown", {})
+    print(f"\n  ── {task} @ {ctx//1024}k ──")
+    if task == "M-RT":
+        print(f"  F1: {result.get('f1', 0)*100:.1f}%")
+    else:
+        print(f"  Accuracy: {result.get('accuracy', 0)*100:.1f}%")
+    if bd:
+        print(f"  {'Depth':<10} {'Score':>8}")
+        for label, stats in sorted(bd.items(), key=lambda x: int(x[0].rstrip("%"))):
+            score = (stats.get("f1", 0) if task == "M-RT" else stats.get("accuracy", 0)) * 100
+            print(f"  {label:<10} {score:>7.1f}%")
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+def main():
+    import argparse
+    from datetime import datetime
+
+    p = argparse.ArgumentParser(
+        description="NeedleBench with depth sweep (requires official dataset)")
+    p.add_argument("model_path")
+    p.add_argument("--context-lengths", type=int, nargs="+", default=[4096, 8192])
+    p.add_argument("--depths", type=int, nargs="+", default=[10, 30, 50, 70, 90],
+                   metavar="DEPTH_PCT")
+    p.add_argument("--num-samples",      type=int, default=None)
+    p.add_argument("--n-gpu-layers",     type=int, default=-1)
+    p.add_argument("--n-batch",          type=int, default=256)
+    p.add_argument("--n-ctx",            type=int, default=16384)
+    p.add_argument("--tasks",            type=str, nargs="+",
+                   default=["S-RT", "M-RT", "M-RS"],
+                   choices=["S-RT", "M-RT", "M-RS"])
+    p.add_argument("--needles-per-sample", type=int, default=3)
+    p.add_argument("--output",           type=str, default=None)
+    args = p.parse_args()
+
+    start = datetime.now()
+    results = evaluate_needlebench(
+        model_path=args.model_path,
+        context_lengths=args.context_lengths,
+        depth_percentages=[d/100.0 for d in args.depths],
+        num_samples=args.num_samples,
+        n_gpu_layers=args.n_gpu_layers,
+        n_batch=args.n_batch,
+        tasks=args.tasks,
+        needles_per_sample=args.needles_per_sample,
+    )
+    results["metadata"]["evaluation_time_seconds"] = (datetime.now()-start).total_seconds()
+
+    if args.output:
+        out = Path(args.output)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        with open(out, "w") as f:
+            json.dump(results, f, indent=2)
+        print(f"Results saved to: {out}")
+
+    return results
+
+
+if __name__ == "__main__":
+    main()
