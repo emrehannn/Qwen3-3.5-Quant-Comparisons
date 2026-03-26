@@ -1,11 +1,29 @@
-# Python virtual environments
-venv/
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environment
 .venv/
-env/
+venv/
 
-# Environment variables / Secrets
-.env
+# Models (large files)
+models/*.gguf
 
-# Specific local files
-expose.md
-models/
+# Results (generated data)
+results/
+results/completed/
+results/figures/
+*.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
