@@ -124,6 +124,9 @@ A model-agnostic baseline showing raw information loss per quant step
 A way to check if Qwen3.5 loses more perplexity per bit than Qwen3 ,  which would be early evidence for our hypothesis
 One clean figure that immediately visualizes the degradation curve
 And we can then say: "Perplexity is comparable across both architectures at each quant level [Figure 1], ruling out differences in quantization quality as a confound. Despite this, Qwen3.5 shows disproportionate degradation on long-context retrieval [Figure 2]..."
+
+⚠️ **Perplexity Interpretation Caveat**: Perplexity was evaluated on WikiText-103 using Unsloth GGUFs; results should be interpreted with caution as Unsloth's imatrix calibration prioritizes long-context chat and tool-calling tasks over standard text corpora. This may result in higher perplexity scores than other quantizers while potentially maintaining better performance on real-world long-context tasks.
+
 It takes 20 minutes to run and costs us nothing experimentally.
 Needle-in-a-Haystack (NIAH) — This is the perfect benchmark for the hypothesis. It directly tests retrieval of a fact buried in a long context. If GDN hidden states compound quantization error, NIAH at 8k–16k context is where it will show. And critically, it's easy to run locally with a script
 GSM8K— Multi-step reasoning chains stress the model's ability to maintain coherent state over many tokens. Good secondary.

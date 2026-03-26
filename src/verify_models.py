@@ -84,24 +84,42 @@ def test_gsm8k_sample(llm: Llama) -> tuple[bool, str, float]:
     question = "Janet buys a multi-flavor pack of cheese. There are 3 swiss cheeses, 4 brie cheeses, and 5 cheddar cheeses. If she eats one cheese per day, how many days will the cheese last?"
     ground_truth = 12.0  # 3 + 4 + 5 = 12
     
-    # Few-shot examples (same as gsm8k.py)
+    # Few-shot examples (same as gsm8k.py - 4-shot)
     fewshot = """Solve this math problem step by step, then end with #### followed by the final numerical answer.
 
-Question: Janet has 3 apples and buys 4 more. How many apples does she have?
+Question: There are 15 trees in the grove. Grove workers will plant trees in the grove today. After they are done, there will be 21 trees. How many trees did the grove workers plant today?
 
 Answer:
-Janet starts with 3 apples.
-She buys 4 more apples.
-3 + 4 = 7
-#### 7
+There are 15 trees originally.
+After planting, there are 21 trees.
+21 - 15 = 6 trees were planted.
+#### 6
 
-Question: A box contains 12 books. If 5 books are removed, how many remain?
+Question: If there are 3 cars in the parking lot and 2 more cars arrive, how many cars are in the parking lot?
 
 Answer:
-The box starts with 12 books.
-5 books are removed.
-12 - 5 = 7
-#### 7
+There are 3 cars originally.
+2 more cars arrive.
+3 + 2 = 5 cars are in the parking lot.
+#### 5
+
+Question: Leah had 32 chocolates and her sister had 42. If they ate 35, how many pieces do they have left in total?
+
+Answer:
+Leah had 32 chocolates.
+Her sister had 42 chocolates.
+32 + 42 = 74 chocolates originally.
+35 chocolates were eaten.
+74 - 35 = 39 chocolates left.
+#### 39
+
+Question: Jason had 20 lollipops. He gave Denny some lollipops. Now Jason has 12 lollipops. How many lollipops did Jason give to Denny?
+
+Answer:
+Jason started with 20 lollipops.
+Jason now has 12 lollipops.
+20 - 12 = 8 lollipops were given to Denny.
+#### 8
 
 Question: {question}
 
