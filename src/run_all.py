@@ -42,6 +42,12 @@ BENCHMARKS = {
         "ctx": 16384,
         "est_time": 35,  # minutes
     },
+    "niah_ablation": {
+        "script": "src/niah.py",
+        "args": ["--context-lengths", "4096", "8192", "--num-positions", "30", "--fixed-positions"],
+        "ctx": 16384,
+        "est_time": 35,  # minutes
+    },
 }
 
 RESULTS_DIR = Path("results")

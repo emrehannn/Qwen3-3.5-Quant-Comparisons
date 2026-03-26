@@ -141,6 +141,47 @@ Answer:"""
     return is_correct, generated[:100], predicted
 
 
+def test_niah_sample(llm: Llama) -> bool:
+    """Quick NIAH test - verify model can retrieve a secret code at 50% depth."""
+    # Create simple haystack (~512 tokens worth of text)
+    sentences = [
+        "The quick brown fox jumps over the lazy dog.",
+        "Pack my box with five dozen liquor jugs.",
+        "How vexingly quick daft zebras jump.",
+    ]
+    haystack = " ".join([sentences[i % 3] for i in range(20)])
+    
+    # Tokenize
+    haystack_tokens = llm.tokenize(haystack.encode())
+    
+    # Create needle
+    code = "NIAH-1234"
+    needle = f"The secret code is: {code}. Remember this code."
+    needle_tokens = llm.tokenize(needle.encode())
+    
+    # Insert at 50% depth
+    insert_pos = len(haystack_tokens) // 2
+    context_tokens = (
+        haystack_tokens[:insert_pos] + 
+        needle_tokens + 
+        haystack_tokens[insert_pos:]
+    )
+    context = llm.detokenize(context_tokens).decode('utf-8', errors='ignore')
+    
+    # Query
+    prompt = f"{context}\n\nQuestion: What is the secret code mentioned in the text above?\nAnswer:"
+    
+    output = llm.create_completion(
+        prompt=prompt,
+        max_tokens=20,
+        temperature=0.0,
+        stop=["\n"],
+    )
+    
+    generated = output["choices"][0]["text"].strip()
+    return code in generated
+
+
 def test_model(name: str, path: str) -> bool:
     """Test load a model and run simple inference + GSM8K."""
     print(f"\nTesting {name}...")
@@ -181,6 +222,15 @@ def test_model(name: str, path: str) -> bool:
             print(f"    ✓ GSM8K: Correct (answer: {answer:.0f})")
         else:
             print(f"    ⚠ GSM8K: Answer extraction test (got: {answer}, preview: '{response_preview}...')")
+        
+        # Run NIAH test
+        print(f"  Testing NIAH retrieval...")
+        niah_ok = test_niah_sample(llm)
+        
+        if niah_ok:
+            print(f"    ✓ NIAH: Retrieved secret code correctly")
+        else:
+            print(f"    ⚠ NIAH: Failed to retrieve code")
         
         print(f"  ✓ Model fully verified")
         

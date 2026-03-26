@@ -189,11 +189,13 @@ def plot_gsm8k(results):
 
 def plot_niah(results):
     """Plot NIAH (Needle-in-a-Haystack) results (Figure 3 - main claim)."""
-    if "niah" not in results or not results["niah"]:
+    # Use niah (random) if available, fall back to niah_ablation
+    niah_key = "niah" if "niah" in results and results["niah"] else "niah_ablation"
+    if niah_key not in results or not results[niah_key]:
         print("No NIAH results found")
         return
     
-    niah_data = results["niah"]
+    niah_data = results[niah_key]
     
     # Organize by model and context length
     data = defaultdict(lambda: defaultdict(dict))
@@ -249,8 +251,74 @@ def plot_niah(results):
     plt.close()
 
 
+def plot_niah_ablation(results):
+    """Plot NIAH position ablation results (Figure 4 - secondary analysis)."""
+    if "niah_ablation" not in results or not results["niah_ablation"]:
+        print("No NIAH ablation results found")
+        return
+    
+    niah_abl_data = results["niah_ablation"]
+    
+    # Organize data by model, quant, context length, and depth
+    data = defaultdict(lambda: defaultdict(lambda: defaultdict(dict)))
+    
+    for model_name, result in niah_abl_data.items():
+        arch, base, quant = parse_model_config(model_name)
+        
+        for ctx_result in result.get("results", []):
+            ctx_len = ctx_result.get("context_length", 0)
+            acc_by_depth = ctx_result.get("accuracy_by_depth", {})
+            
+            for depth_str, acc in acc_by_depth.items():
+                data[base][quant][ctx_len][depth_str] = acc * 100
+    
+    if not data:
+        print("No valid NIAH ablation data")
+        return
+    
+    # Create subplot for each context length
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    context_lengths = [4096, 8192]
+    depth_order = ["10%", "25%", "50%", "75%", "90%"]
+    
+    for idx, ctx_len in enumerate(context_lengths):
+        ax = axes[idx]
+        
+        models = sorted(data.keys())
+        x = np.arange(len(depth_order))
+        width = 0.35
+        
+        for i, model in enumerate(models):
+            # Average across quant levels for cleaner view, or pick one
+            # Let's show Q4 as the most interesting case
+            quant = "Q4"
+            values = []
+            for d in depth_order:
+                val = data[model].get(quant, {}).get(ctx_len, {}).get(d, 0)
+                values.append(val)
+            
+            if any(v > 0 for v in values):  # Only plot if we have data
+                offset = width * (i - len(models)/2 + 0.5)
+                ax.bar(x + offset, values, width, label=f"{model} ({quant})")
+        
+        ax.set_xlabel("Needle Depth in Document")
+        ax.set_ylabel("Retrieval Accuracy (%)")
+        ax.set_title(f"Context Length: {ctx_len} tokens")
+        ax.set_xticks(x)
+        ax.set_xticklabels(depth_order)
+        ax.legend()
+        ax.set_ylim(0, 100)
+    
+    fig.suptitle("Figure 4: Position-Dependent Retrieval (NIAH Ablation) - Secondary Analysis", 
+                 fontsize=12, fontweight='bold')
+    plt.tight_layout()
+    plt.savefig(FIGURES_DIR / "figure4_niah_ablation.png", dpi=150)
+    plt.savefig(FIGURES_DIR / "figure4_niah_ablation.pdf")
+    print(f"Saved: {FIGURES_DIR / 'figure4_niah_ablation.png'}")
+    plt.close()
+
+
 def print_summary_table(results):
-    """Print a summary table of all results."""
     print("\n" + "=" * 80)
     print("BENCHMARK SUMMARY")
     print("=" * 80)
@@ -308,11 +376,13 @@ def main():
     plot_perplexity(results)
     plot_gsm8k(results)
     plot_niah(results)
+    plot_niah_ablation(results)  # New ablation figure
     
     print(f"\nFigures saved to: {FIGURES_DIR}/")
     print("  - figure1_perplexity.png")
     print("  - figure2_gsm8k.png")
     print("  - figure3_niah.png (main result)")
+    print("  - figure4_niah_ablation.png (position ablation)")
 
 
 if __name__ == "__main__":

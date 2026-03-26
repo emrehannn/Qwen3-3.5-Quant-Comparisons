@@ -129,6 +129,24 @@ And we can then say: "Perplexity is comparable across both architectures at each
 
 It takes 20 minutes to run and costs us nothing experimentally.
 Needle-in-a-Haystack (NIAH) — This is the perfect benchmark for the hypothesis. It directly tests retrieval of a fact buried in a long context. If GDN hidden states compound quantization error, NIAH at 8k–16k context is where it will show. And critically, it's easy to run locally with a script
+
+**Dual NIAH Methodology (Standard + Ablation):**
+We run NIAH twice per model configuration to isolate position-dependent effects:
+
+1. **Standard NIAH (Random Placement)** — Primary result comparable to literature
+   - 30 random needle positions per context length (4k, 8k)
+   - Tests general long-context retrieval capability
+   - Figure 2: Overall accuracy by quant level
+
+2. **Position Ablation (Fixed Depths)** — Secondary analysis for GDN hypothesis
+   - Needles placed at fixed depths: 10%, 25%, 50%, 75%, 90% through document
+   - 6 trials per depth = 30 total positions per context length
+   - Small jitter (±2%) avoids structural artifacts in filler text
+   - Tests hypothesis: GDN compounds error over distance, so early needles (10%) in long contexts should show worst degradation
+   - Figure 3: Accuracy by needle depth × quant level
+
+This design gives us both methodological validity (random = standard) and mechanistic insight (fixed = ablation). If GDN hidden states compound quantization error, we expect Qwen3.5 to show accuracy drops specifically at 10% depth in 8k contexts — where the recurrent state must carry information furthest — while Qwen3 (pure attention) should show flat or random patterns.
+
 GSM8K— Multi-step reasoning chains stress the model's ability to maintain coherent state over many tokens. Good secondary.
 Final Recommendation: 3 Benchmarks, Not 2
 Perplexity → GSM8K → NIAH
@@ -141,10 +159,9 @@ The story writes itself: "Perplexity shows comparable information loss between a
 The minimum viable experimental core is:
 2 models (Qwen3 xB vs Qwen3.5 xB, same size if possible)
 3 quant level- Q8 Q4 Q3
-3 benchmarks max — NIAH (our core claim), GSM8K
+4 benchmarks — perplexity, GSM8K, NIAH (random), NIAH ablation (fixed positions)
 2 context lengths for NIAH — 4k and 8k. Drop 16k on a laptop, it'll take forever and potentially OOM
-That's 6 model configs × 3 benchmarks = 18 runs + wikitext103. 
-That's a three-act paper with a clean thesis.
+That's 6 model configs × 4 benchmarks = 24 runs total.
 
 Rough estimates based on a 4060 laptop (8GB) with 4B GGUF models, ~25–35 tok/s at Q4:
 **WikiText-103 Perplexity**
@@ -157,19 +174,21 @@ This is the dangerous one. 1,319 test problems, ~200 tokens of output each.
 You need to add `--limit 250` to lm-eval. That cuts it to:
 - ~45 min per config × 6 = **~4.5 hours total**
 250 samples is statistically fine for a mini paper, just note it in Methodology.
-**NIAH**
-Fast because it's pass/fail on short outputs. ~30 needle positions × 2 context lengths per config.
-- ~30–45 min per config × 6 configs = **~3–4 hours total**
-
+**NIAH (Dual Runs)**
+We run NIAH twice per model: standard random placement (main result) and fixed-position ablation (secondary analysis).
+- ~30–45 min per config × 6 configs × 2 runs = **~7 hours total**
+  - Random placement: 3.5 hours
+  - Fixed-position ablation: 3.5 hours
 
 ## Total
 
 | Benchmark | Total |
 | Perplexity | ~2 hrs |
 | GSM8K (--limit 250) | ~4.5 hrs |
-| NIAH | ~3.5 hrs |
+| NIAH (random) | ~3.5 hrs |
+| NIAH ablation (fixed) | ~3.5 hrs |
 | Buffer for OOMs, reloading, misc | ~2 hrs |
-| **Total** | **~12 hours** |
+| **Total** | **~16 hours** |
 
 Run everything overnight across 2 nights and you're done with compute by day 3. The key is queuing runs back-to-back in a script so you're not babysitting it.
 

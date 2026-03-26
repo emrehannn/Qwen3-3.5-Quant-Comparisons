@@ -41,8 +41,14 @@ def evaluate_niah(
     context_lengths: list[int] = [4096, 8192],
     num_positions: int = 30,
     n_ctx: int = 16384,
+    fixed_positions: bool = False,
 ) -> dict:
-    """Run NIAH benchmark at specified context lengths."""
+    """Run NIAH benchmark at specified context lengths.
+    
+    Args:
+        fixed_positions: If True, test at fixed depths (10%, 25%, 50%, 75%, 90%)
+                        If False, use random placement (standard NIAH)
+    """
     
     print(f"Loading model: {model_path}")
     llm = Llama(
@@ -73,10 +79,25 @@ def evaluate_niah(
         correct = 0
         positions_tested = []
         
-        for i in range(num_positions):
-            # Insert needle at random position
+        # Determine test positions
+        if fixed_positions:
+            # Fixed depths for ablation: 10%, 25%, 50%, 75%, 90%
+            depths = [0.10, 0.25, 0.50, 0.75, 0.90]
+            trials_per_depth = max(1, num_positions // len(depths))
+            test_positions = []
+            for depth in depths:
+                for _ in range(trials_per_depth):
+                    # Add small jitter (±2%) to avoid exact structural boundaries
+                    jitter = random.uniform(-0.02, 0.02)
+                    test_positions.append(min(0.95, max(0.05, depth + jitter)))
+            random.shuffle(test_positions)  # Shuffle to avoid order effects
+        else:
+            # Random placement (standard NIAH)
+            test_positions = [random.uniform(0.05, 0.95) for _ in range(num_positions)]
+        
+        for depth in test_positions:
             needle, code = create_needle()
-            insert_pos = random.randint(0, len(haystack_tokens) - 50)
+            insert_pos = int(len(haystack_tokens) * depth)
             
             # Insert needle into haystack
             needle_tokens = llm.tokenize(needle.encode())
@@ -104,26 +125,57 @@ def evaluate_niah(
                 correct += 1
             
             positions_tested.append({
-                "position": insert_pos / len(haystack_tokens),
+                "depth": depth,
                 "needle": code,
                 "predicted": generated,
                 "correct": is_correct,
             })
         
-        accuracy = correct / num_positions
-        print(f"  Accuracy at {ctx_len}: {accuracy:.1%} ({correct}/{num_positions})")
+        # Calculate overall accuracy
+        accuracy = correct / len(positions_tested) if positions_tested else 0.0
         
-        all_results.append({
+        # Calculate accuracy by depth bins if using fixed positions
+        accuracy_by_depth = {}
+        if fixed_positions:
+            from collections import defaultdict
+            depth_results = defaultdict(lambda: {'correct': 0, 'total': 0})
+            for pos_info in positions_tested:
+                # Round to nearest standard depth
+                depth = pos_info['depth']
+                closest_depth = min([0.10, 0.25, 0.50, 0.75, 0.90], 
+                                   key=lambda x: abs(x - depth))
+                depth_results[closest_depth]['total'] += 1
+                if pos_info['correct']:
+                    depth_results[closest_depth]['correct'] += 1
+            
+            for d in [0.10, 0.25, 0.50, 0.75, 0.90]:
+                if depth_results[d]['total'] > 0:
+                    accuracy_by_depth[f"{int(d*100)}%"] = (
+                        depth_results[d]['correct'] / depth_results[d]['total']
+                    )
+        
+        result_entry = {
             "context_length": ctx_len,
             "accuracy": accuracy,
             "correct": correct,
-            "total": num_positions,
+            "total": len(positions_tested),
             "positions": positions_tested,
-        })
+        }
+        
+        if accuracy_by_depth:
+            result_entry["accuracy_by_depth"] = accuracy_by_depth
+            depth_str = ", ".join([f"{k}: {v:.1%}" for k, v in accuracy_by_depth.items()])
+            print(f"  Accuracy at {ctx_len}: {accuracy:.1%} ({correct}/{len(positions_tested)})")
+            print(f"    By depth: {depth_str}")
+        else:
+            print(f"  Accuracy at {ctx_len}: {accuracy:.1%} ({correct}/{len(positions_tested)})")
+        
+        all_results.append(result_entry)
     
     return {
         "model": model_path,
         "benchmark": "niah",
+        "fixed_positions": fixed_positions,
         "context_lengths_tested": context_lengths,
         "results": all_results,
     }
@@ -138,6 +190,7 @@ def main():
     parser.add_argument("--num-positions", type=int, default=30)
     parser.add_argument("--output", type=str, help="Output JSON file")
     parser.add_argument("--n-ctx", type=int, default=16384, help="Model max context")
+    parser.add_argument("--fixed-positions", action="store_true", help="Use fixed depths (10%, 25%, 50%, 75%, 90%) instead of random")
     
     args = parser.parse_args()
     
@@ -146,6 +199,7 @@ def main():
         args.context_lengths,
         args.num_positions,
         args.n_ctx,
+        args.fixed_positions,
     )
     
     if args.output:
