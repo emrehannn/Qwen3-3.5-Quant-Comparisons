@@ -94,8 +94,8 @@ def evaluate_perplexity(model_path: str, limit: int = 1000, n_ctx: int = 2048) -
         "model": model_path,
         "benchmark": "wikitext103",
         "limit": limit,
-        "perplexity": perplexity,
-        "total_tokens": total_tokens,
+        "perplexity": float(perplexity),
+        "total_tokens": int(total_tokens),
     }
 
 
