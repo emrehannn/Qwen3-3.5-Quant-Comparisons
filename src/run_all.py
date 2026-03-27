@@ -28,7 +28,6 @@ RESULTS_DIR.mkdir(exist_ok=True)
 #
 # Q8 models are restricted to short-context benchmarks only.
 # On an RTX 4060 8 GB, a Q8 model (~4.3 GB weights) leaves ~3.7 GB for the
-# KV cache. At 8k context that is tight-to-OOM; 16k is not viable.
 # Running perplexity and GSM8K at ctx=2048 is safe at any quant level.
 # ---------------------------------------------------------------------------
 MODELS = [
@@ -93,18 +92,6 @@ def format_duration(minutes: float) -> str:
     mins  = int(minutes % 60)
     return f"{hours}h{mins:02d}m"
 
-
-# def build_queue() -> list[tuple]:
-#     """
-#     Return all (config_name, model_path, benchmark, spec) tuples,
-#     filtered by each model's allowed_benchmarks list.
-#     """
-#     queue = []
-#     for config_name, model_path, allowed in MODELS:
-#         for benchmark, spec in BENCHMARKS.items():
-#             if benchmark in allowed:
-#                 queue.append((config_name, model_path, benchmark, spec))
-#     return queue
 
 def build_queue() -> list[tuple]:
     """
@@ -210,8 +197,13 @@ def run_benchmark(config_name: str, model_path: str, benchmark: str,
         spec["script"],
         model_path,
         "--output", str(result_file),
-        "--n-ctx",  str(spec["ctx"]),
-    ] + spec.get("args", [])
+    ]
+    
+    # NeedleBench natively computes the max ctx, passing --n-ctx will crash it!
+    if benchmark != "needlebench":
+        cmd.extend(["--n-ctx", str(spec["ctx"])])
+        
+    cmd.extend(spec.get("args", []))
 
     try:
         process = subprocess.Popen(

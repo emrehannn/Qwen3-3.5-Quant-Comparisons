@@ -299,7 +299,6 @@ def plot_depth_degradation(results: dict) -> None:
     (needle near start of document → info must survive many recurrent steps)
     while Qwen3 should show a flatter profile.
 
-    Only Q4 and Q3 models run NeedleBench (Q8 is excluded due to VRAM).
     Scores are multiplied by 100 for percentage display.
     """
     bench_key = "needlebench"

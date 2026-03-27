@@ -19,6 +19,11 @@ The evaluation consists of three distinct tasks testing increasing levels of cog
 
 S-RT (Single-Needle Retrieval): A pure retrieval task where a single target fact is inserted into the haystack.
 
+On the seeding question (#5)
+Your current design is actually correct and defensible as-is — but you need to state it explicitly in the paper.
+What the code does: rng = random.Random(42) is reset at the start of each depth loop, so sample index i at depth 10% sees the exact same haystack as sample index i at depth 30%, 50%, etc. Only the needle insertion position differs. This is clean experimental design — it isolates the depth variable from haystack content variance.
+The argument you make to reviewers: "Haystack content was held constant across depth conditions for each sample by design, ensuring that observed accuracy differences reflect needle position rather than haystack variation." 
+
 M-RT (Multi-Needle Retrieval): Tests sustained attention by scattering multiple needles throughout the document, requiring the model to successfully locate all of them.
 
 M-RS (Multi-Fact Reasoning): The most complex task. Derivations are inserted as needles, forcing the model to retrieve multiple disparate facts and logically combine them to answer a complex question.
