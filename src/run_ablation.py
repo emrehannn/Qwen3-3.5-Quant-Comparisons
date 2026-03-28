@@ -47,6 +47,15 @@ haystack_ds = load_needlebench_subset("en_haystack_texts", split="test")
 haystack_texts = [s["text"] for s in haystack_ds if s.get("text")]
 reasoning_ds = load_needlebench_subset("multi_needle_reasoning_needle", split="test")
 
+_PROMPT_ORIGINAL = (
+    "Below is a long document. Read it carefully and answer the question.\n"
+    "Document:\n{context}\n\n"
+    "Question: {question}\n"
+    "Instructions: You must wrap your final, concise answer inside <answer> and </answer> tags. "
+    "If the document does not contain the answer, reply with exactly <answer>NOT FOUND</answer>.\n"
+    "Response:"
+)
+
 _PROMPT_ABLATED = (
     "Below is a long document. Read it carefully and answer the question.\n"
     "Document:\n{context}\n\n"
@@ -56,7 +65,11 @@ _PROMPT_ABLATED = (
 )
 
 def evaluate_model(model_name, model_path, targets):
-    print(f"\n{'='*60}\nEvaluating ablation on {model_name}\n{'='*60}")
+    if not Path(model_path).exists():
+        print(f"[!] Model not found: {model_path}. Skipping {model_name}.")
+        return
+
+    print(f"\n{'='*80}\nEvaluating ablation on {model_name}\n{'='*80}")
     llm = Llama(model_path=model_path, n_gpu_layers=-1, n_batch=256, n_ctx=4096, flash_attn=True, verbose=False)
     
     for idx, target in enumerate(targets):
@@ -80,20 +93,31 @@ def evaluate_model(model_name, model_path, targets):
         context = build_haystack_with_multiple_needles(
             llm, haystack_texts, derivations, target_tokens, depth, rng)
             
-        output = llm.create_completion(
-            prompt=_PROMPT_ABLATED.format(context=context, question=question),
-            max_tokens=150, temperature=0.0,
-            stop=["Question:", "Document:", "<|im_end|>"])
-            
-        raw_generated = output["choices"][0]["text"].strip()
-        generated     = extract_structured_answer(raw_generated)
-        score         = composite_retrieval_score(generated, expected)
-        
         print(f"\n[Target {idx+1}] Context: {ctx_len} tokens | Depth: {int(depth*100)}%")
         print(f"Goal Expected : {expected}")
-        print(f"Actual Result : {generated}")
-        print(f"Passed Score  : {'YES (>=0.5)' if score >= 0.5 else 'NO (<0.5)'} (Raw Score: {score:.2f})")
+        print(f"{'-'*40}")
+        print(f"{'Condition':<15} | {'Result':<40} | {'Score':<6} | {'Passed'}")
+        print(f"{'-'*80}")
+
+        for cond_name, prompt_tmpl in [("ORIGINAL", _PROMPT_ORIGINAL), ("ABLATED", _PROMPT_ABLATED)]:
+            output = llm.create_completion(
+                prompt=prompt_tmpl.format(context=context, question=question),
+                max_tokens=150, temperature=0.0,
+                stop=["Question:", "Document:", "<|im_end|>"])
+            
+            raw_generated = output["choices"][0]["text"].strip()
+            generated     = extract_structured_answer(raw_generated)
+            score         = composite_retrieval_score(generated, expected)
+            
+            res_short = (generated[:37] + "...") if len(generated) > 40 else generated
+            passed = "YES" if score >= 0.5 else "NO"
+            print(f"{cond_name:<15} | {res_short:<40} | {score:.2f} | {passed}")
+
+# We try to find Qwen3.5 UD path if Qwen3 UD is missing
+q3_ud_path = "models/Qwen3-4B-Instruct-2507-UD-Q3_K_XL.gguf"
+if not Path(q3_ud_path).exists():
+    q3_ud_path = "models/Qwen3.5-4B-UD-Q3_K_XL.gguf"
 
 evaluate_model("Qwen3-4B Q8", "models/Qwen3-4B-Instruct-2507-Q8_0.gguf", matched_targets)
-evaluate_model("Qwen3-4B UD-Q3", "models/Qwen3-4B-Instruct-2507-UD-Q3_K_XL.gguf", matched_targets)
+evaluate_model("UD-Q3 (XL)", q3_ud_path, matched_targets)
 print("\nABLATION COMPLETE")
