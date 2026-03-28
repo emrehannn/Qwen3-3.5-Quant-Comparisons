@@ -54,26 +54,14 @@ Context lengths: 4k, 8k, and 16k tokens.
 Depths: Embedded at exactly 5%, 10%, 30%, 50%, 70%, and 90% document depth.
 Samples: 15 independent trials per depth configuration.
 By systematically varying both context length and insertion depth, this design isolates two distinct architectural failure modes:
+
 Context Overload: Evaluated by comparing overall performance across 4k, 8k, and 16k contexts. A uniform collapse at 16k regardless of depth indicates the model's hidden state has saturated simply from the raw volume of prior tokens.
 Positional Decay (The Primary Hypothesis): Evaluated by comparing depths within the same context length. If GDN hidden states compound quantization error over sequence distance, Qwen3.5 should show severe accuracy drops specifically at early depths (e.g., 5–10%) in long contexts—where the recurrent state must carry information furthest—while the pure attention Qwen3 should maintain a much flatter degradation profile.
 Scale: 3 tasks × 3 contexts × 6 depths × 15 samples = 810 evaluations per model. Across 6 model configurations, this yields 4,860 individual long-context evaluations.
-5. Compute Estimates (RTX 4060 8GB)
-Benchmark
-Est. Time per config
-Total Time (6 configs)
-WikiText-103 Perplexity
-~15-20 min
-~2 hours
-GSM8K (--limit 250)
-~45 min
-~4.5 hours
-NeedleBench (S-RT, M-RT, M-RS at 16k)
-~170 min (2.8 hrs)
-~17 hours
-Total Empirical Compute
 
 
-~23.5 - 25 hours
+
+
 
 6. Proposed Paper Outline (6-7 Pages)
 Introduction & Research Question (1 page): Shift from pure Transformers to hybrid architectures for local deployment; unstudied quantization behavior in recurrent components.
@@ -82,6 +70,8 @@ Methodology (1 page): Details of models, quants, benchmarks, and hardware setup,
 Results (1.5 pages): Presentation of empirical data, leading with NeedleBench degradation curves and depth-ablation findings.
 Discussion (1 page): Analysis of compounding quantization errors; implications for local deployment on consumer GPUs.
 Conclusion & Limitations (0.5 pages).
+
+
 7. References
 $$1$$
 Yang, A., Li, A., Yang, B., Zhang, B., Hui, B., Zheng, B., ... & Qwen Team. (2025). Qwen3 Technical Report. arXiv preprint arXiv:2505.09388. https://arxiv.org/abs/2505.09388

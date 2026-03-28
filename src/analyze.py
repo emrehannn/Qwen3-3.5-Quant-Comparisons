@@ -40,16 +40,16 @@ sns.set_theme(style="whitegrid", font_scale=1.2)
 plt.rcParams["figure.dpi"] = 150
 
 # Consistent color / marker scheme
-COLORS  = {"Qwen3": "#1f77b4", "Qwen3.5": "#ff7f0e"}
+COLORS  = {"Qwen3": "#4C72B0", "Qwen3.5": "#DD8452"}
 MARKERS = {"Qwen3": "o",       "Qwen3.5": "s"}
-QUANT_ORDER     = ["Q8", "Q4", "Q3"]
-QUANT_LINESTYLE = {"Q8": "-",  "Q4": "--", "Q3": ":"}
+QUANT_ORDER     = ["Q8", "Q4", "Q3", "Q3-UD"]
+QUANT_LINESTYLE = {"Q8": "-",  "Q4": "--", "Q3": ":", "Q3-UD": "-."}
 
 LABEL_MAP = {
     "Q8_0":      "Q8",
     "Q4_K_M":    "Q4",
     "Q3_K_M":    "Q3",
-    "UD-Q3_K_XL": "Q3",
+    "UD-Q3_K_XL": "Q3-UD",
 }
 
 
@@ -133,16 +133,27 @@ def plot_perplexity(results: dict) -> None:
         ppl_data[base][quant] = ppl
 
     fig, ax = plt.subplots(figsize=(8, 5))
-    x_pos = np.arange(len(QUANT_ORDER))
+    base_quants = [q for q in QUANT_ORDER if q != "Q3-UD"]
+    x_pos = np.arange(len(base_quants))
 
     for model in sorted(ppl_data):
-        values = [ppl_data[model].get(q, np.nan) for q in QUANT_ORDER]
+        values = [ppl_data[model].get(q, np.nan) for q in base_quants]
         ax.plot(x_pos, values,
                 marker=MARKERS.get(model, "o"), linewidth=2.5, markersize=10,
                 label=model, color=COLORS.get(model, "gray"))
 
+        # Plot Q3-UD accurately on the Q3 X-axis
+        if "Q3-UD" in ppl_data[model] and not np.isnan(ppl_data[model]["Q3-UD"]):
+            q3_idx = base_quants.index("Q3")
+            val = ppl_data[model]["Q3-UD"]
+            ax.plot([q3_idx], [val], marker="*", 
+                    markersize=12, color=COLORS.get(model, "gray"), markeredgecolor='black', markeredgewidth=1)
+            ax.annotate("Q3-UD", xy=(q3_idx, val), xytext=(20, -10),
+                        textcoords="offset points", ha="left", va="top", fontsize=9,
+                        color=COLORS.get(model, "black"))
+
     ax.set_xticks(x_pos)
-    ax.set_xticklabels(QUANT_ORDER)
+    ax.set_xticklabels(base_quants)
     ax.set_xlabel("Quantisation Level")
     ax.set_ylabel("Perplexity (lower = better)")
     ax.set_title("Figure 1: WikiText-103 Perplexity by Quantisation Level",
@@ -754,6 +765,189 @@ def _save(fig: plt.Figure, stem: str) -> None:
     plt.close(fig)
 
 
+def print_qwen3_scheme_supplementary_table(results: dict) -> None:
+    sep = "══════════════════════════════════════════════════════════════════════════════"
+    print(f"\n{sep}")
+    print("  SUPPLEMENTARY TABLE: Qwen3 Scheme Sensitivity (M-RS & M-RT)")
+    print(f"{sep}")
+    print("  Scheme       | Bit-width | M-RS (16k) | M-RT (16k)")
+    print("  -------------|-----------|------------|-----------")
+    
+    nb = results.get("needlebench", {})
+    
+    # We want exactly these configs for Qwen3
+    targets = [
+        ("Qwen3-4B-Q8_0", "8-bit"),
+        ("Qwen3-4B-Q4_K_M", "4-bit"),
+        ("Qwen3-4B-Q3_K_M", "3-bit"),
+        ("Qwen3-4B-UD-Q3_K_XL", "3-bit (Dynamic)")
+    ]
+    
+    for model_key, bit_desc in targets:
+        if model_key in nb:
+            # NeedleBench uses "Qwen3" / config as keys, wait in load_all_results it uses the raw filename.
+            # No, 'model_name' is the key in results["needlebench"].
+            pass
+            
+    # Actually, in load_all_results, the keys are `model_path.stem` which drops `_needlebench`.
+    # So the keys are "Qwen3-4B-Q8", "Qwen3-4B-UD-Q3_K_XL", etc.
+    # Let's map target name -> config
+    # In run_all.py the output files are like `Qwen3.5-4B-Q4_K_M_needlebench.json` so the stem is `Qwen3.5-4B-Q4_K_M`.
+    targets_updated = [
+        ("Qwen3-4B-Q8", "8-bit"),
+        ("Qwen3-4B-Q4", "4-bit"),
+        ("Qwen3-4B-Q3", "3-bit"),
+        ("Qwen3-4B-UD-Q3_K_XL", "3-bit (Dynamic)"),
+    ]
+    
+    for model_key, bit_desc in targets_updated:
+        # Check raw json names matching
+        matches = [k for k in nb.keys() if model_key in k]
+        if not matches:
+            continue
+        exact_match = sorted(matches, key=len)[0]
+        res = nb[exact_match]
+        
+        # M-RS 16k
+        m_rs_16k = "N/A"
+        m_rt_16k = "N/A"
+        
+        for r in res.get("tasks", {}).get("M-RS", []):
+            if r.get("context_length", 0) == 16384:
+                m_rs_16k = f"{r.get('accuracy', 0.0)*100:.1f}%"
+        for r in res.get("tasks", {}).get("M-RT", []):
+            if r.get("context_length", 0) == 16384:
+                m_rt_16k = f"{r.get('accuracy', 0.0)*100:.1f}%"
+                
+        # Extract scheme name from key
+        scheme = model_key.split("4B-")[-1]
+        print(f"  {scheme:<12} | {bit_desc:<9} | {m_rs_16k:<10} | {m_rt_16k:<10}")
+        
+    print(f"{sep}\n")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Figure 8 — Context Degradation Slopes
+# ══════════════════════════════════════════════════════════════════════════════
+
+def plot_context_degradation_slopes(results: dict) -> None:
+    bench_key = "needlebench"
+    if bench_key not in results: return
+    
+    models_data = defaultdict(lambda: defaultdict(lambda: defaultdict(dict)))
+    all_ctx_lengths = set()
+    
+    tasks = ["M-RT", "M-RS"]
+    
+    for model_name, result in results[bench_key].items():
+        _, base, quant = parse_model_config(model_name)
+        if quant not in QUANT_ORDER: continue 
+        for task in tasks:
+            task_results = result.get("tasks", {}).get(task, [])
+            for r in task_results:
+                ctx = r.get("context_length", 0)
+                if not ctx: continue
+                all_ctx_lengths.add(ctx)
+                val = r.get("accuracy", None)
+                if val is not None:
+                    models_data[base][task][quant][ctx] = val * 100
+    
+    ctx_lengths = sorted(list(all_ctx_lengths))
+    if not ctx_lengths: return
+    
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6), sharey=True)
+    for i, task in enumerate(tasks):
+        ax = axes[i]
+        for base in ["Qwen3", "Qwen3.5"]:
+            for quant in QUANT_ORDER:
+                ctx_dict = models_data[base][task].get(quant, {})
+                if not ctx_dict: continue
+                y_vals = [ctx_dict.get(c, np.nan) for c in ctx_lengths]
+                ax.plot(ctx_lengths, y_vals, 
+                        marker=MARKERS.get(base, 'o'), 
+                        linestyle=QUANT_LINESTYLE.get(quant, '-'), 
+                        color=COLORS.get(base, 'gray'),
+                        linewidth=2.5, markersize=8,
+                        label=f"{base} {quant}")
+        
+        ax.set_title(f"Context Degradation Slopes — {task}", fontweight="bold")
+        ax.set_xticks(ctx_lengths)
+        ax.set_xticklabels([f"{c//1024}k" for c in ctx_lengths])
+        ax.set_xlabel("Context Length")
+        if i == 0: ax.set_ylabel("Accuracy (%)")
+        ax.set_ylim(0, 100)
+        ax.grid(True, alpha=0.3)
+    
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="lower center", ncol=4, bbox_to_anchor=(0.5, -0.05), frameon=True)
+    plt.suptitle("Figure 8: Context Degradation Slopes — Q8 vs Q4 Acceleration", fontsize=14, fontweight="bold")
+    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+    
+    _save(fig, "figure8_context_slopes")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Figure 9 — Refusal Rates
+# ══════════════════════════════════════════════════════════════════════════════
+
+def plot_refusal_rates(results: dict) -> None:
+    bench_key = "needlebench"
+    if bench_key not in results: return
+    
+    curves = defaultdict(lambda: defaultdict(lambda: defaultdict(float)))
+    all_ctx_lengths = set()
+    
+    for model_name, result in results[bench_key].items():
+        _, base, quant = parse_model_config(model_name)
+        task_results = result.get("tasks", {}).get("M-RS", [])
+        for task_result in task_results:
+            ctx = task_result.get("context_length", 0)
+            if not ctx: continue
+            all_ctx_lengths.add(ctx)
+            
+            trials = task_result.get("trials", [])
+            refusals = 0
+            for t in trials:
+                pred = t.get("predicted", "")
+                if isinstance(pred, list):
+                    pred = " ".join(str(p) for p in pred)
+                elif not isinstance(pred, str):
+                    pred = str(pred)
+                if "NOT FOUND" in pred:
+                    refusals += 1
+            if trials:
+                curves[base][quant][ctx] = (refusals / len(trials)) * 100
+
+    ctx_lengths = sorted(list(all_ctx_lengths))
+    if not ctx_lengths: return
+
+    fig, ax = plt.subplots(figsize=(8, 6))
+    for base in ["Qwen3", "Qwen3.5"]:
+        for quant in QUANT_ORDER:
+            if quant not in curves[base]: continue
+            ctx_dict = curves[base][quant]
+            if not ctx_dict: continue
+            y_vals = [ctx_dict.get(c, np.nan) for c in ctx_lengths]
+            if all(np.isnan(y) for y in y_vals): continue
+            
+            ax.plot(ctx_lengths, y_vals, 
+                    marker=MARKERS.get(base, 'o'), 
+                    linestyle=QUANT_LINESTYLE.get(quant, '-'), 
+                    color=COLORS.get(base, 'gray'),
+                    linewidth=2.5, markersize=8,
+                    label=f"{base} {quant}")
+
+    ax.set_title("Figure 9: Refusal Behavior ('NOT FOUND' Rate) on M-RS", fontweight="bold")
+    ax.set_xticks(ctx_lengths)
+    ax.set_xticklabels([f"{c//1024}k" for c in ctx_lengths])
+    ax.set_xlabel("Context Length")
+    ax.set_ylabel("Refusal Rate (%)")
+    ax.set_ylim(0, 100)
+    ax.grid(True, alpha=0.3)
+    ax.legend(ncol=4, bbox_to_anchor=(0.5, -0.15), loc='upper center', frameon=True)
+    plt.tight_layout(rect=[0, 0, 1, 0.9])
+    
+    _save(fig, "figure9_refusal_rates")
+
 # ══════════════════════════════════════════════════════════════════════════════
 # Main
 # ══════════════════════════════════════════════════════════════════════════════
@@ -767,15 +961,18 @@ def main() -> None:
         return
 
     print_summary_table(results)
+    print_qwen3_scheme_supplementary_table(results)
 
     print("\nGenerating figures...")
     plot_perplexity(results)          # Figure 1
     plot_gsm8k(results)               # Figure 2
     plot_needlebench_heatmap(results) # Figure 3
     plot_depth_degradation(results)   # Figure 4 — THESIS FIGURE (S-RT + M-RS)
-    plot_deltas(results)              # Figure 5
-    plot_mrt_depth(results)           # Figure 6 — M-RT F1 depth curves
+    # plot_deltas(results)              # Figure 5
+    # plot_mrt_depth(results)           # Figure 6 — M-RT F1 depth curves
     plot_per_task_deltas(results)     # Figure 7 — per-task Q8→Q3 deltas
+    plot_context_degradation_slopes(results) # Figure 8
+    plot_refusal_rates(results)       # Figure 9
 
     print(f"\nAll figures saved to: {FIGURES_DIR}/")
 

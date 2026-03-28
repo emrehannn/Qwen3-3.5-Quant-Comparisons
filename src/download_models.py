@@ -20,11 +20,14 @@ MODELS = [
     # Qwen3 4B Instruct 2507
     ("unsloth/Qwen3-4B-Instruct-2507-GGUF", "Qwen3-4B-Instruct-2507-Q8_0.gguf"),
     ("unsloth/Qwen3-4B-Instruct-2507-GGUF", "Qwen3-4B-Instruct-2507-Q4_K_M.gguf"),
+    ("unsloth/Qwen3-4B-Instruct-2507-GGUF", "Qwen3-4B-Instruct-2507-Q3_K_M.gguf"),
     ("unsloth/Qwen3-4B-Instruct-2507-GGUF", "Qwen3-4B-Instruct-2507-UD-Q3_K_XL.gguf"),
+
     # Qwen3.5 4B
     ("unsloth/Qwen3.5-4B-GGUF", "Qwen3.5-4B-Q8_0.gguf"),
     ("unsloth/Qwen3.5-4B-GGUF", "Qwen3.5-4B-Q4_K_M.gguf"),
     ("unsloth/Qwen3.5-4B-GGUF", "Qwen3.5-4B-Q3_K_M.gguf"),
+    ("unsloth/Qwen3.5-4B-GGUF", "Qwen3.5-4B-UD-Q3_K_XL.gguf"),
 ]
 
 MODELS_DIR = Path("./models")

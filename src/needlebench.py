@@ -183,12 +183,24 @@ def is_negation_or_refusal(text: str) -> bool:
 
 
 def _is_exact_phrase_match(short_text: str, long_text: str) -> bool:
-    """Checks if short_text is a contiguous phrase safely inside long_text."""
+    """
+    Checks if short_text is a contiguous phrase safely inside long_text.
+    Includes special handling for Chinese/Japanese/Korean (CJK) where word
+    boundaries (\b) are not appropriate for concatenated characters.
+    """
     if len(short_text) < 3:
         return False
-    # Use regex word boundaries to avoid matching "the" inside "there"
-    pattern = r'\b' + re.escape(short_text) + r'\b'
-    return bool(re.search(pattern, long_text))
+
+    # If the text is entirely ASCII, or ends with ASCII word chars, use \b.
+    # Otherwise (CJK), simple substring containment is safer because CJK
+    # does not use spaces between words.
+    is_ascii = bool(re.match(r'^[\x00-\x7F]*$', short_text))
+    
+    if is_ascii:
+        pattern = r'\b' + re.escape(short_text) + r'\b'
+        return bool(re.search(pattern, long_text))
+    else:
+        return short_text in long_text
 
 
 def composite_retrieval_score(predicted: str, reference: str) -> float:

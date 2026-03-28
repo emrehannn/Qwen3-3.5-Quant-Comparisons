@@ -9,7 +9,7 @@ from llama_cpp import Llama
 MODELS = [
     ("Qwen3-4B-Q8", "models/Qwen3-4B-Instruct-2507-Q8_0.gguf"),
     ("Qwen3-4B-Q4", "models/Qwen3-4B-Instruct-2507-Q4_K_M.gguf"),
-    ("Qwen3-4B-Q3", "models/Qwen3-4B-Instruct-2507-UD-Q3_K_XL.gguf"),
+    ("Qwen3-4B-Q3", "models/Qwen3-4B-Instruct-2507-Q3_K_M.gguf"),
     ("Qwen3.5-4B-Q8", "models/Qwen3.5-4B-Q8_0.gguf"),
     ("Qwen3.5-4B-Q4", "models/Qwen3.5-4B-Q4_K_M.gguf"),
     ("Qwen3.5-4B-Q3", "models/Qwen3.5-4B-Q3_K_M.gguf"),

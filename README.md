@@ -50,8 +50,8 @@ python src/download_models.py
 ```
 
 Downloads 6 GGUF models (~18GB total):
-- **Qwen3-4B** (pure Transformer): Q8_0, Q4_K_M, UD-Q3_K_XL
-- **Qwen3.5-4B** (GDN hybrid): Q8_0, Q4_K_M, Q3_K_M
+- **Qwen3-4B** (pure Transformer): Q8_0, Q4_K_M, Q3_K_M, UD-Q3_K_XL
+- **Qwen3.5-4B** (GDN hybrid): Q8_0, Q4_K_M, Q3_K_M, UD-Q3_K_XL
 
 ### 3. Sanity Check (optional)
 

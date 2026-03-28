@@ -36,7 +36,9 @@ MODELS = [
      ["perplexity", "gsm8k", "needlebench"]), 
     ("Qwen3-4B-Q4", "models/Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
      ["perplexity", "gsm8k", "needlebench"]),
-    ("Qwen3-4B-Q3", "models/Qwen3-4B-Instruct-2507-UD-Q3_K_XL.gguf",
+    ("Qwen3-4B-Q3", "models/Qwen3-4B-Instruct-2507-Q3_K_M.gguf",
+     ["perplexity", "gsm8k", "needlebench"]),
+    ("Qwen3-4B-UD-Q3_K_XL", "models/Qwen3-4B-Instruct-2507-UD-Q3_K_XL.gguf",
      ["perplexity", "gsm8k", "needlebench"]),
 
     # Qwen3.5-4B (GDN hybrid)
@@ -45,6 +47,8 @@ MODELS = [
     ("Qwen3.5-4B-Q4", "models/Qwen3.5-4B-Q4_K_M.gguf",
      ["perplexity", "gsm8k", "needlebench"]),
     ("Qwen3.5-4B-Q3", "models/Qwen3.5-4B-Q3_K_M.gguf",
+     ["perplexity", "gsm8k", "needlebench"]),
+    ("Qwen3.5-4B-UD-Q3_K_XL", "models/Qwen3.5-4B-UD-Q3_K_XL.gguf",
      ["perplexity", "gsm8k", "needlebench"]),
 ]
 
