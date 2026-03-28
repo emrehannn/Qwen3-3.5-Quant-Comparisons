@@ -11,17 +11,20 @@ This repository contains the experimental code and benchmarks for comparing quan
 ```
 ├── models/              # Downloaded GGUF models (not in git)
 ├── results/             # Benchmark outputs (not in git)
-│   └── completed/       # Finished benchmark results
+│   ├── completed/       # Finished benchmark JSONs (auto-moved)
+│   └── figures/         # Generated plots (PNG + PDF)
 ├── src/                 # Source code
 │   ├── download_models.py   # Model downloader with retry
 │   ├── perplexity.py        # WikiText-103 perplexity benchmark
 │   ├── gsm8k.py             # GSM8K math reasoning benchmark
-│   ├── niah.py              # Needle-in-a-Haystack long-context test
+│   ├── needlebench.py       # OpenCompass NeedleBench (S-RT, M-RT, M-RS)
 │   ├── run_all.py           # Batch runner with pause/resume
 │   ├── state.py             # State management for crash recovery
-│   └── analyze.py           # Results analysis and plotting
+│   ├── analyze.py           # Results analysis and plotting (7 figures)
+│   └── debugpipeline.py     # 1-sample sanity check for all models/tasks
 ├── requirements.txt     # Python dependencies
-└── expose.md            # Research paper plan and citations
+├── expose.md            # Research paper plan and citations
+└── methodology_summary.md  # Technical methodology notes
 ```
 
 ## Quick Start
@@ -46,11 +49,19 @@ pip install -r requirements.txt
 python src/download_models.py
 ```
 
-This downloads 6 GGUF models (~18GB total):
-- Qwen3-4B: Q8_0, Q4_K_M, UD-Q3_K_XL
-- Qwen3.5-4B: Q8_0, Q4_K_M, Q3_K_M
+Downloads 6 GGUF models (~18GB total):
+- **Qwen3-4B** (pure Transformer): Q8_0, Q4_K_M, UD-Q3_K_XL
+- **Qwen3.5-4B** (GDN hybrid): Q8_0, Q4_K_M, Q3_K_M
 
-### 3. Run Benchmarks
+### 3. Sanity Check (optional)
+
+```bash
+python src/debugpipeline.py
+```
+
+Runs 1 sample per task per model to verify the full pipeline before committing to the full run.
+
+### 4. Run Benchmarks
 
 ```bash
 # Start or resume benchmarks (auto-resumes by default)
@@ -62,23 +73,39 @@ python src/run_all.py --fresh
 
 **Pause/Resume:** Press `Ctrl+C` to pause. State is saved automatically. Run the same command later to resume.
 
-### 4. Analyze Results
+### 5. Analyze Results
 
 ```bash
 python src/analyze.py
 ```
 
-Generates comparison plots in `results/figures/`.
+Generates 7 comparison figures in `results/figures/` (PNG + PDF).
 
 ## Benchmarks
 
-| Benchmark | Purpose | Est. Time |
-|-----------|---------|-----------|
-| **WikiText-103 Perplexity** | Raw information loss per quant level | ~2 hrs total |
-| **GSM8K (250 samples)** | Short-context reasoning control | ~4.5 hrs total |
-| **NIAH (4k & 8k context)** | Long-context retrieval (main claim) | ~3.5 hrs total |
+| Benchmark | Purpose | Context | Est. Time |
+|-----------|---------|---------|-----------|
+| **WikiText-103 Perplexity** | Raw information loss per quant level | 2048 | ~2 hrs total |
+| **GSM8K (250 samples)** | Short-context reasoning control | 2048 | ~4.5 hrs total |
+| **NeedleBench S-RT** | Single-needle retrieval by depth | 4k/8k/16k | ~17 hrs total |
+| **NeedleBench M-RT** | Multi-needle retrieval by depth | 4k/8k/16k | (included above) |
+| **NeedleBench M-RS** | Multi-fact reasoning by depth | 4k/8k/16k | (included above) |
 
-**Total runtime:** ~10-12 hours on RTX 4060 8GB
+**NeedleBench grid:** 3 tasks × 3 context lengths × 6 depths (5/10/30/50/70/90%) × 15 samples = 810 evaluations per model (4,860 total)
+
+**Total runtime:** ~23–25 hours on RTX 4060 8GB (flash attention + n_batch=256)
+
+## Generated Figures
+
+| Figure | Content |
+|--------|---------|
+| 1 | WikiText-103 perplexity by quantization level |
+| 2 | GSM8K accuracy — short-context control |
+| 3 | NeedleBench heatmap (task × context × quant) |
+| 4 | **Depth-degradation curves — S-RT + M-RS (thesis figure)** |
+| 5 | Q8→Q3 degradation delta (overall) |
+| 6 | M-RT accuracy depth curves |
+| 7 | Per-task Q8→Q3 degradation deltas |
 
 ## Hardware Requirements
 
@@ -87,11 +114,9 @@ Generates comparison plots in `results/figures/`.
 - **Storage:** ~20GB free space (18GB models + results)
 - **OS:** Linux (tested on Debian/Ubuntu)
 
-## Results Structure
+## Scoring
 
-Results are stored in two folders:
-- `results/*.json` - In-progress benchmarks
-- `results/completed/*.json` - Completed benchmarks (moved automatically)
+All three NeedleBench tasks use `composite_retrieval_score = max(levenshtein_soft_score, predicted_coverage_score, substr_score)` with a 0.5 correctness threshold. This is format-agnostic — concise extractions and full-sentence answers both score correctly.
 
 ## Citation
 
@@ -100,3 +125,4 @@ See `expose.md` for full paper structure, methodology details, and citations.
 ## License
 
 Research code for academic use.
+

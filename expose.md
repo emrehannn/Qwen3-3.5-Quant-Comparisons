@@ -45,17 +45,18 @@ Multi-step reasoning chains stress the model's ability to maintain coherent stat
 3. OpenCompass NeedleBench (Long-Context Experimental Condition):
 Utilizes the official NeedleBench framework (Li et al., 2024) to test long-context retrieval and reasoning across varying information densities. We evaluate three distinct tasks:
 S-RT (Single-Needle Retrieval): Pure retrieval of a single fact.
-M-RT (Multi-Needle Retrieval): Sustained attention across distant tokens to retrieve multiple facts.
+M-RT (Multi-Needle Retrieval): Sustained attention across distant tokens to retrieve multiple facts (5 needles per sample).
 M-RS (Multi-Fact Reasoning): Retrieving multiple derivations and logically combining them.
+All three tasks use a unified composite_retrieval_score = max(levenshtein_soft_score, predicted_coverage_score, substr_score) with a 0.5 correctness threshold. This is format-agnostic — concise extractions and full-sentence answers both score correctly, eliminating per-architecture output style bias.
 The Experimental Grid & Failure Mode Isolation:
 Each task is evaluated across a rigid combinatorial grid:
 Context lengths: 4k, 8k, and 16k tokens.
-Depths: Embedded at exactly 10%, 30%, 50%, 70%, and 90% document depth.
-Samples: 50 independent trials per depth configuration.
+Depths: Embedded at exactly 5%, 10%, 30%, 50%, 70%, and 90% document depth.
+Samples: 15 independent trials per depth configuration.
 By systematically varying both context length and insertion depth, this design isolates two distinct architectural failure modes:
 Context Overload: Evaluated by comparing overall performance across 4k, 8k, and 16k contexts. A uniform collapse at 16k regardless of depth indicates the model's hidden state has saturated simply from the raw volume of prior tokens.
-Positional Decay (The Primary Hypothesis): Evaluated by comparing depths within the same context length. If GDN hidden states compound quantization error over sequence distance, Qwen3.5 should show severe accuracy drops specifically at early depths (e.g., 10%) in long contexts—where the recurrent state must carry information furthest—while the pure attention Qwen3 should maintain a much flatter degradation profile.
-Scale: 3 tasks × 3 contexts × 5 depths × 50 samples = 2,250 evaluations per model. Across 6 model configurations, this yields 13,500 individual long-context evaluations.
+Positional Decay (The Primary Hypothesis): Evaluated by comparing depths within the same context length. If GDN hidden states compound quantization error over sequence distance, Qwen3.5 should show severe accuracy drops specifically at early depths (e.g., 5–10%) in long contexts—where the recurrent state must carry information furthest—while the pure attention Qwen3 should maintain a much flatter degradation profile.
+Scale: 3 tasks × 3 contexts × 6 depths × 15 samples = 810 evaluations per model. Across 6 model configurations, this yields 4,860 individual long-context evaluations.
 5. Compute Estimates (RTX 4060 8GB)
 Benchmark
 Est. Time per config

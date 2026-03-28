@@ -6,8 +6,8 @@ Key design decisions:
   - Q8 models now run everything despite expose and readme, flash attention + batching saves us from OOM
     long-context KV cache at Q8 weight size — see expose.md).
   - Q4 and Q3 models run all three benchmarks including NeedleBench.
-  - NeedleBench is capped at 4k and 8k context (not 16k) for this hardware.
-  - Depth sweep is explicit: 10 30 50 70 90 percent.
+  - Depth sweep is explicit: 5 10 30 50 70 90 percent.
+  - NeedleBench runs 4k, 8k, and 16k context. Q8 models included via flash attention.
 """
 import argparse
 import json
@@ -26,7 +26,7 @@ RESULTS_DIR.mkdir(exist_ok=True)
 # Model configurations
 # Each entry: (display_name, model_path, allowed_benchmarks)
 #
-# Q8 models are restricted to short-context benchmarks only.
+
 # On an RTX 4060 8 GB, a Q8 model (~4.3 GB weights) leaves ~3.7 GB for the
 # Running perplexity and GSM8K at ctx=2048 is safe at any quant level.
 # ---------------------------------------------------------------------------
@@ -68,15 +68,15 @@ BENCHMARKS = {
         "script": "src/needlebench.py",
         # Context lengths: 4k, 8k, and 16k.
         # --depths: explicit sweep matching the depth-ablation design.
-        # --num-samples: 50 groups keeps runtime tractable (~3.5 hrs total).
         "args": [
             "--context-lengths", "4096", "8192", "16384",
-            "--depths", "10", "30", "50", "70", "90",
-            "--num-samples", "50",
+            "--depths", "5", "10", "30", "50", "70", "90",
+            "--num-samples", "15",
             "--n-batch", "256",
+            "--needles-per-sample", "5", 
         ],
         "ctx":      16384,   # n_ctx = max(context_lengths) passed to the script
-        "est_time": 30,
+        "est_time": 90,
     },
 }
 

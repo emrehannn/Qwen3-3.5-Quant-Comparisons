@@ -1,7 +1,7 @@
 """
 NeedleBench: Long-context Retrieval and Reasoning Benchmark
 
-Based on "NeedleBench: Can LLMs Do Retrieval and Reasoning in Information-Dense Context?"
+Based on NeedleBench: Can LLMs Do Retrieval and Reasoning in 1 Million Context Window?"
 Paper: arXiv:2407.11963
 
 Implements the official NeedleBench evaluation tasks:
@@ -31,7 +31,7 @@ Scoring design for S-RT and M-RS:
     M-RT uses token-set F1, which is already format-agnostic — no change needed.
 
 Depth variation:
-    Every task is evaluated at multiple depth percentages (default 10%-90%).
+    Every task is evaluated at multiple depth percentages (default 5%-90%).
     Haystack content is held constant across depth conditions per sample (rng reseeded
     per depth loop), so observed accuracy differences isolate needle position effects
     rather than haystack variation.
@@ -42,8 +42,6 @@ DATA REQUIREMENT: This benchmark requires the official OpenCompass NeedleBench d
 Dataset downloaded automatically from HuggingFace:
     https://huggingface.co/datasets/opencompass/NeedleBench
 
-WARNING: This benchmark WILL NOT run without the official dataset.
-         Results based on synthetic data are NOT valid research.
 
 Reference:
     Li et al. "Can LLMs Do Retrieval and Reasoning in Information-Dense Context?"
@@ -61,7 +59,7 @@ import random
 
 
 TASK_TYPES     = ["S-RT", "M-RT", "M-RS"]
-DEFAULT_DEPTHS = [0.1, 0.3, 0.5, 0.7, 0.9]
+DEFAULT_DEPTHS = [0.05, 0.1, 0.3, 0.5, 0.7, 0.9]
 
 # Minimum number of predicted tokens required for predicted_coverage_score to
 # activate. Guards against trivially short outputs (e.g. 'the moon') that would
@@ -413,15 +411,18 @@ def evaluate_single_retrieval(llm, needle_dataset, haystack_texts,
 
 def evaluate_multi_retrieval(llm, needle_dataset, haystack_texts,
                               ctx_len, depth_percentages, num_samples,
-                              needles_per_sample=3):
+                              needles_per_sample=5):
     """
     M-RT: embed needles_per_sample needles starting at each depth, ask each question.
 
-    Scoring: token-set precision / recall / F1.
-    F1 is format-agnostic — a concise extraction and a full sentence both score
-    correctly so long as the content words match. No composite score needed.
+    Scoring: composite_retrieval_score per needle (same as S-RT and M-RS).
+    This eliminates the format-sensitivity bias of token-set F1, where a
+    concise-but-correct answer like "Voyager of the Stars" would be penalized
+    for missing the preamble words of the full reference sentence.
 
-    precision / recall / f1 in [0, 1].
+    correct = True if composite score >= 0.5 (consistent with S-RT/M-RS).
+    accuracy = correct / total, in [0, 1].
+    Legacy F1 is still stored per-needle for reference.
     """
     RESERVE = 400
     indices = list(range(len(needle_dataset)))
@@ -449,7 +450,8 @@ def evaluate_multi_retrieval(llm, needle_dataset, haystack_texts,
             context = build_haystack_with_multiple_needles(
                 llm, haystack_texts, needles, target_tokens, depth, rng)
 
-            ps, rs, fs = [], [], []
+            scores     = []
+            corrects   = []
             needle_results = []
             for question, expected in zip(questions, expecteds):
                 output    = llm.create_completion(
@@ -460,44 +462,54 @@ def evaluate_multi_retrieval(llm, needle_dataset, haystack_texts,
                 raw_generated = output["choices"][0]["text"].strip()
                 generated     = extract_structured_answer(raw_generated)
 
-                p, r, f = calculate_precision_recall_f1(generated, expected)  # [0,1]
-                ps.append(p); rs.append(r); fs.append(f)
+                score      = composite_retrieval_score(generated, expected)  # [0,1]
+                is_correct = score >= 0.5
+                # Legacy F1 kept for reference / backward analysis
+                _, _, f1_legacy = calculate_precision_recall_f1(generated, expected)
+
+                scores.append(score)
+                corrects.append(is_correct)
                 needle_results.append({"question": question, "expected": expected,
                                        "predicted": generated,
-                                       "precision": p, "recall": r, "f1": f})
+                                       "score": score, "correct": is_correct,
+                                       "legacy_f1": f1_legacy})
 
             nq    = len(needle_results)
+            nc    = sum(1 for c in corrects if c)
             trial = {"depth_percent": int(depth * 100), "needle_count": nq,
-                     "avg_precision": sum(ps) / nq, "avg_recall": sum(rs) / nq,
-                     "avg_f1": sum(fs) / nq, "needle_results": needle_results}
+                     "avg_score": sum(scores) / nq,
+                     "accuracy":  nc / nq,
+                     "correct": nc, "total": nq,
+                     "needle_results": needle_results}
             results_by_depth[depth].append(trial)
             all_results.append(trial)
 
     total = len(all_results)
     if total == 0:
         return {"task": "M-RT", "task_description": "Multi-Needle Retrieval",
-                "context_length": ctx_len, "precision": 0.0, "recall": 0.0,
-                "f1": 0.0, "total": 0, "depth_breakdown": {}, "trials": []}
+                "context_length": ctx_len, "accuracy": 0.0, "avg_score": 0.0,
+                "correct": 0, "total": 0, "depth_breakdown": {}, "trials": []}
 
-    avg_p  = sum(r["avg_precision"] for r in all_results) / total  # [0,1]
-    avg_r  = sum(r["avg_recall"]    for r in all_results) / total  # [0,1]
-    avg_f1 = sum(r["avg_f1"]        for r in all_results) / total  # [0,1]
+    all_correct = sum(r["correct"] for r in all_results)
+    all_needles = sum(r["total"]   for r in all_results)
+    accuracy    = all_correct / all_needles if all_needles > 0 else 0.0  # [0,1]
 
     depth_breakdown = {}
     for d, dr in results_by_depth.items():
         dt = len(dr)
         if dt == 0:
             continue
+        d_correct = sum(r["correct"] for r in dr)
+        d_total   = sum(r["total"]   for r in dr)
         depth_breakdown[f"{int(d * 100)}%"] = {
-            "precision": sum(r["avg_precision"] for r in dr) / dt,  # [0,1]
-            "recall":    sum(r["avg_recall"]    for r in dr) / dt,  # [0,1]
-            "f1":        sum(r["avg_f1"]        for r in dr) / dt,  # [0,1]
-            "total": dt,
+            "accuracy":  d_correct / d_total if d_total > 0 else 0.0,            # [0,1]
+            "avg_score": sum(r["avg_score"] for r in dr) / dt if dt > 0 else 0.0, # [0,1]
+            "correct": d_correct, "total": d_total,
         }
 
     return {"task": "M-RT", "task_description": "Multi-Needle Retrieval",
-            "context_length": ctx_len, "precision": avg_p, "recall": avg_r,
-            "f1": avg_f1, "total": total,
+            "context_length": ctx_len, "accuracy": accuracy,
+            "correct": all_correct, "total": all_needles,
             "depth_breakdown": depth_breakdown, "trials": all_results}
 
 
@@ -636,9 +648,10 @@ def evaluate_needlebench(model_path, context_lengths=None, depth_percentages=Non
         "tasks_evaluated":          tasks,
         "needles_per_sample_mrt":   needles_per_sample,
         "scoring_note": (
-            "S-RT and M-RS use composite_retrieval_score = max(levenshtein_soft_score, "
-            "predicted_coverage_score, substr_score). M-RT uses token-set F1. "
-            "levenshtein_score is also stored per trial for reference."
+            "All three tasks (S-RT, M-RT, M-RS) use composite_retrieval_score = "
+            "max(levenshtein_soft_score, predicted_coverage_score, substr_score). "
+            "M-RT also stores legacy_f1 per needle for reference. "
+            "levenshtein_score is stored per trial for S-RT and M-RS."
         ),
         "tasks":            {},
         # NOTE: All composite scores in [0, 1]. Multiply by 100 for percentages.
@@ -669,14 +682,9 @@ def evaluate_needlebench(model_path, context_lengths=None, depth_percentages=Non
 
         output["tasks"][task] = task_results
 
-        if task in ("S-RT", "M-RS"):
-            key  = "accuracy"
-            vals = [r[key] for r in task_results if key in r]
-        elif task == "M-RT":
-            key  = "f1"
-            vals = [r[key] for r in task_results if key in r]
-        else:
-            vals = []
+        # All tasks now use accuracy as the composite metric
+        key  = "accuracy"
+        vals = [r[key] for r in task_results if key in r]
         output["composite_scores"][task] = sum(vals) / len(vals) if vals else 0.0  # [0,1]
 
     s_rt = output["composite_scores"].get("S-RT", 0.0)
@@ -686,7 +694,7 @@ def evaluate_needlebench(model_path, context_lengths=None, depth_percentages=Non
 
     print(f"\n{'=' * 60}\nNEEDLEBENCH RESULTS SUMMARY\n{'=' * 60}")
     print(f"S-RT  accuracy : {s_rt * 100:.2f}%")
-    print(f"M-RT  F1       : {m_rt * 100:.2f}%")
+    print(f"M-RT  accuracy : {m_rt * 100:.2f}%")
     print(f"M-RS  accuracy : {m_rs * 100:.2f}%")
     print(f"Overall        : {output['composite_scores']['Overall'] * 100:.2f}%")
     print(f"Formula: 0.4·S-RT + 0.3·M-RT + 0.3·M-RS\n{'=' * 60}")
@@ -699,14 +707,11 @@ def _print_task_result(result):
     ctx  = result.get("context_length", 0)
     bd   = result.get("depth_breakdown", {})
     print(f"\n  ── {task} @ {ctx // 1024}k ──")
-    if task == "M-RT":
-        print(f"  F1: {result.get('f1', 0) * 100:.1f}%")
-    else:
-        print(f"  Accuracy: {result.get('accuracy', 0) * 100:.1f}%")
+    print(f"  Accuracy: {result.get('accuracy', 0) * 100:.1f}%")
     if bd:
         print(f"  {'Depth':<10} {'Score':>8}")
         for label, stats in sorted(bd.items(), key=lambda x: int(x[0].rstrip("%"))):
-            score = (stats.get("f1", 0) if task == "M-RT" else stats.get("accuracy", 0)) * 100
+            score = stats.get("accuracy", 0) * 100
             print(f"  {label:<10} {score:>7.1f}%")
 
 
