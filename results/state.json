@@ -1,0 +1,67 @@
+{
+  "started_at": "2026-03-28T18:10:48.064344",
+  "last_updated": "2026-03-28T21:29:06.744733",
+  "completed": [
+    "Qwen3-4B-Q8_needlebench",
+    "Qwen3.5-4B-Q8_needlebench",
+    "Qwen3-4B-Q8_perplexity",
+    "Qwen3-4B-Q8_gsm8k",
+    "Qwen3-4B-Q4_perplexity",
+    "Qwen3-4B-Q4_gsm8k",
+    "Qwen3-4B-Q4_needlebench",
+    "Qwen3-4B-Q3_perplexity",
+    "Qwen3-4B-Q3_gsm8k",
+    "Qwen3-4B-Q3_needlebench",
+    "Qwen3.5-4B-Q8_perplexity",
+    "Qwen3.5-4B-Q8_gsm8k",
+    "Qwen3.5-4B-Q4_perplexity",
+    "Qwen3.5-4B-Q4_gsm8k",
+    "Qwen3.5-4B-Q4_needlebench",
+    "Qwen3.5-4B-Q3_perplexity",
+    "Qwen3.5-4B-Q3_gsm8k",
+    "Qwen3.5-4B-Q3_needlebench",
+    "Qwen3.5-4B-UD-Q3_K_XL_perplexity",
+    "Qwen3.5-4B-UD-Q3_K_XL_gsm8k",
+    "Qwen3.5-4B-UD-Q3_K_XL_needlebench"
+  ],
+  "in_progress": null,
+  "remaining": [],
+  "errors": [
+    {
+      "config": "Qwen3-4B-UD-Q3_K_XL",
+      "benchmark": "perplexity",
+      "error": "Invalid model file: File not found",
+      "timestamp": "2026-03-28T19:13:15.723299"
+    },
+    {
+      "config": "Qwen3-4B-UD-Q3_K_XL",
+      "benchmark": "gsm8k",
+      "error": "Invalid model file: File not found",
+      "timestamp": "2026-03-28T19:13:15.723703"
+    },
+    {
+      "config": "Qwen3-4B-UD-Q3_K_XL",
+      "benchmark": "needlebench",
+      "error": "Invalid model file: File not found",
+      "timestamp": "2026-03-28T19:13:15.723862"
+    },
+    {
+      "config": "Qwen3-4B-UD-Q3_K_XL",
+      "benchmark": "perplexity",
+      "error": "Invalid model file: File not found",
+      "timestamp": "2026-03-28T19:20:32.283213"
+    },
+    {
+      "config": "Qwen3-4B-UD-Q3_K_XL",
+      "benchmark": "gsm8k",
+      "error": "Invalid model file: File not found",
+      "timestamp": "2026-03-28T19:20:32.283624"
+    },
+    {
+      "config": "Qwen3-4B-UD-Q3_K_XL",
+      "benchmark": "needlebench",
+      "error": "Invalid model file: File not found",
+      "timestamp": "2026-03-28T19:20:32.284582"
+    }
+  ]
+}

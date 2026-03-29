@@ -12,11 +12,7 @@ venv/
 # Models (large files)
 models/*.gguf
 
-# Results (generated data)
-results/
-results/completed/
-results/figures/
-*.json
+
 
 # IDE
 .vscode/

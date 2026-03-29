@@ -1,0 +1,7 @@
+{
+  "model": "models/Qwen3-4B-Instruct-2507-UD-Q3_K_XL.gguf",
+  "benchmark": "wikitext103",
+  "limit": 1000,
+  "perplexity": 18.807479685071602,
+  "total_tokens": 71521
+}
