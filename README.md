@@ -120,7 +120,7 @@ All three NeedleBench tasks use `composite_retrieval_score = max(levenshtein_sof
 
 ## Citation
 
-See `expose.md` for full paper structure, methodology details, and citations.
+See the `expose.md` file for full paper structure, methodology details, and citations.
 
 ## License
 
