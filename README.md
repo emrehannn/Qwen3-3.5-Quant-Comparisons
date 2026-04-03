@@ -97,15 +97,15 @@ Generates 7 comparison figures in `results/figures/` (PNG + PDF).
 
 ## Generated Figures
 
-| Figure | Content |
-|--------|---------|
-| 1 | WikiText-103 perplexity by quantization level |
-| 2 | GSM8K accuracy — short-context control |
-| 3 | NeedleBench heatmap (task × context × quant) |
-| 4 | **Depth-degradation curves — S-RT + M-RS (thesis figure)** |
-| 5 | Q8→Q3 degradation delta (overall) |
-| 6 | M-RT accuracy depth curves |
-| 7 | Per-task Q8→Q3 degradation deltas |
+| # | Figure Content | Preview |
+|---|----------------|---------|
+| 1 | WikiText-103 perplexity by quantization level | ![Figure 1](results/figures/figure1_perplexity.png) |
+| 2 | GSM8K accuracy — short-context control | ![Figure 2](results/figures/figure2_gsm8k.png) |
+| 3 | NeedleBench heatmap (task × context × quant) | ![Figure 3](results/figures/figure3_needlebench_heatmap.png) |
+| 4 | **Depth-degradation curves — S-RT + M-RS (thesis figure)** | ![Figure 4](results/figures/figure4_depth_degradation.png) |
+| 5 | Per-task Q8→Q3 degradation deltas | ![Figure 5](results/figures/figure7_per_task_deltas.png) |
+| 6 | Context-degradation slopes | ![Figure 6](results/figures/figure8_context_slopes.png) |
+| 7 | Refusal rates (Qwen3 vs Qwen3.5) | ![Figure 7](results/figures/figure9_refusal_rates.png) |
 
 ## Hardware Requirements
 
