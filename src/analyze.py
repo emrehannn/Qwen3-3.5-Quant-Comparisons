@@ -936,7 +936,7 @@ def plot_refusal_rates(results: dict) -> None:
                     linewidth=2.5, markersize=8,
                     label=f"{base} {quant}")
 
-    ax.set_title("Figure 9: Refusal Behavior ('NOT FOUND' Rate) on M-RS", fontweight="bold")
+    ax.set_title("Refusal Rates on M-RS", fontweight="bold")
     ax.set_xticks(ctx_lengths)
     ax.set_xticklabels([f"{c//1024}k" for c in ctx_lengths])
     ax.set_xlabel("Context Length")

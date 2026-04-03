@@ -1,23 +1,8 @@
-# Core inference engine
-llama-cpp-python>=0.3.0
-
-# HuggingFace for model downloads and datasets
-huggingface-hub[hf-transfer]>=0.24.0
-datasets>=2.14.0
-
-# Evaluation framework
-lm-eval>=0.4.0
-Levenshtein
-
-# Data processing
-numpy>=1.24.0
-pandas>=2.0.0
-tqdm>=4.65.0
-
-# Visualization
-matplotlib>=3.7.0
-seaborn>=0.12.0
-
-# Utilities
-psutil>=5.9.0
-pyyaml>=6.0
+llama-cpp-python
+numpy
+matplotlib
+seaborn
+huggingface_hub
+tqdm
+datasets
+python-Levenshtein
