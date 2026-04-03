@@ -87,9 +87,9 @@ Generates 7 comparison figures in `results/figures/` (PNG + PDF).
 |-----------|---------|---------|-----------|
 | **WikiText-103 Perplexity** | Raw information loss per quant level | 2048 | ~2 hrs total |
 | **GSM8K (250 samples)** | Short-context reasoning control | 2048 | ~4.5 hrs total |
-| **NeedleBench S-RT** | Single-needle retrieval by depth | 4k/8k/16k | ~17 hrs total |
-| **NeedleBench M-RT** | Multi-needle retrieval by depth | 4k/8k/16k | (included above) |
-| **NeedleBench M-RS** | Multi-fact reasoning by depth | 4k/8k/16k | (included above) |
+| **NeedleBench S-RT** | Single-needle retrieval by depth | 4k/8k/16k | ~5 hrs total |
+| **NeedleBench M-RT** | Multi-needle retrieval by depth | 4k/8k/16k | ~8 hrs total |
+| **NeedleBench M-RS** | Multi-fact reasoning by depth | 4k/8k/16k | ~8 hrs total |
 
 **NeedleBench grid:** 3 tasks × 3 context lengths × 6 depths (5/10/30/50/70/90%) × 15 samples = 810 evaluations per model (4,860 total)
 
