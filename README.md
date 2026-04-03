@@ -112,7 +112,7 @@ Generates 7 comparison figures in `results/figures/` (PNG + PDF).
 - **GPU:** NVIDIA GPU with CUDA support (tested on RTX 4060 8GB)
 - **RAM:** 16GB+ recommended
 - **Storage:** ~20GB free space (18GB models + results)
-- **OS:** Linux (tested on Debian/Ubuntu)
+- **OS:** Linux (tested on Debian, benchmarked in headless TTY)
 
 ## Scoring
 
@@ -120,9 +120,6 @@ All three NeedleBench tasks use `composite_retrieval_score = max(levenshtein_sof
 
 ## Citation
 
-See the`expose.md` file for full paper structure, methodology details, and citations.
+See the paper for methodology details and citations.
 
-## License
-
-Research code for academic use.
 
