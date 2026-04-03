@@ -10,7 +10,7 @@ This repository contains the experimental code and benchmarks for comparing quan
 
 ```
 ├── models/              # Downloaded GGUF models (not in git)
-├── results/             # Benchmark outputs (not in git)
+├── results/             # Benchmark outputs
 │   ├── completed/       # Finished benchmark JSONs (auto-moved)
 │   └── figures/         # Generated plots (PNG + PDF)
 ├── src/                 # Source code
@@ -22,9 +22,7 @@ This repository contains the experimental code and benchmarks for comparing quan
 │   ├── state.py             # State management for crash recovery
 │   ├── analyze.py           # Results analysis and plotting (7 figures)
 │   └── debugpipeline.py     # 1-sample sanity check for all models/tasks
-├── requirements.txt     # Python dependencies
-├── expose.md            # Research paper plan and citations
-└── methodology_summary.md  # Technical methodology notes
+└── requirements.txt     # Python dependencies
 ```
 
 ## Quick Start
